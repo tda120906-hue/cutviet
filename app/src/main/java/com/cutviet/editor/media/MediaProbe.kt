@@ -10,7 +10,9 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.exifinterface.media.ExifInterface
 import com.cutviet.editor.model.Clip
-import com.cutviet.editor.model.Music
+import com.cutviet.editor.model.AudioKind
+import com.cutviet.editor.model.AudioTrack
+import com.cutviet.editor.model.Overlay
 
 /** Reads the metadata the editor needs from picked media. */
 object MediaProbe {
@@ -98,13 +100,28 @@ object MediaProbe {
         return 30f to 0
     }
 
-    fun probeMusic(context: Context, uri: Uri): Music? {
+    /** Probes [uri] as an overlay layer starting at [startMs] on the timeline. */
+    fun probeOverlay(context: Context, uri: Uri, startMs: Long): Overlay? {
+        val c = probeClip(context, uri) ?: return null
+        return Overlay(
+            uri = c.uri, mime = c.mime, isImage = c.isImage, sourceDurationMs = c.sourceDurationMs,
+            width = c.width, height = c.height, hasAudio = c.hasAudio, startMs = startMs,
+        )
+    }
+
+    fun probeAudio(context: Context, uri: Uri, kind: AudioKind, startMs: Long): AudioTrack? {
         val r = MediaMetadataRetriever()
         try {
             r.setDataSource(context, uri)
             val duration = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: return null
+            if (r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO) == null &&
+                r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_VIDEO) != null
+            ) return null
             val title = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
-            return Music(uri = uri.toString(), name = title ?: displayName(context, uri) ?: "Âm thanh", sourceDurationMs = duration)
+            return AudioTrack(
+                kind = kind, uri = uri.toString(), name = title ?: displayName(context, uri) ?: "Âm thanh",
+                sourceDurationMs = duration, startMs = startMs,
+            )
         } catch (e: Exception) {
             return null
         } finally {

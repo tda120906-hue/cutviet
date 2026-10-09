@@ -51,7 +51,13 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,6 +75,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.cutviet.editor.media.Thumbnails
+import com.cutviet.editor.media.VoiceEngine
+import com.cutviet.editor.model.AudioKind
+import com.cutviet.editor.model.VoiceSpec
 import com.cutviet.editor.model.Adjustments
 import com.cutviet.editor.model.AspectRatio
 import com.cutviet.editor.model.CropSpec
@@ -82,11 +91,12 @@ import com.cutviet.editor.ui.theme.Accent
 import com.cutviet.editor.ui.theme.Surface2
 import com.cutviet.editor.ui.theme.Surface3
 import com.cutviet.editor.ui.theme.TextDim
+import kotlinx.coroutines.delay
 import java.util.Locale
 import kotlin.math.roundToInt
 
 @Composable
-fun PanelHost(vm: EditorViewModel, panel: Panel, onReplaceMusic: () -> Unit) {
+fun PanelHost(vm: EditorViewModel, panel: Panel) {
     Column(Modifier.fillMaxWidth().height(290.dp).background(Color(0xFF141418))) {
         Row(
             Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 4.dp),
@@ -110,7 +120,10 @@ fun PanelHost(vm: EditorViewModel, panel: Panel, onReplaceMusic: () -> Unit) {
                 Panel.ADJUST -> AdjustPanel(vm)
                 Panel.TEXT -> TextPanel(vm, stickers = false)
                 Panel.STICKER -> TextPanel(vm, stickers = true)
-                Panel.MUSIC -> MusicPanel(vm, onReplaceMusic)
+                Panel.AUDIO -> AudioPanel(vm)
+                Panel.OVERLAY -> OverlayPanel(vm)
+                Panel.OVERLAY_KEY -> OverlayKeyPanel(vm)
+                Panel.VOICE -> VoicePanel(vm)
                 Panel.CANVAS -> CanvasPanel(vm)
                 Panel.DURATION -> DurationPanel(vm)
             }
@@ -520,45 +533,6 @@ private fun TextEditor(vm: EditorViewModel, t: TextItem) {
     }
 }
 
-// ---------- music ----------
-
-@Composable
-private fun MusicPanel(vm: EditorViewModel, onReplace: () -> Unit) {
-    val m = vm.project.music ?: return
-    Text(m.name, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    Text("Độ dài: ${formatTime(m.sourceDurationMs)}", color = TextDim, fontSize = 12.sp)
-    LabeledSlider("Âm lượng nhạc", m.volume, 0f..2f, "${pct(m.volume)}%") { v ->
-        vm.updateProject { p -> p.copy(music = p.music?.copy(volume = (v * 20).roundToInt() / 20f)) }
-    }
-    if (m.sourceDurationMs > 2000) {
-        LabeledSlider(
-            "Bắt đầu nhạc từ", m.startMs.toFloat(), 0f..(m.sourceDurationMs - 1000).toFloat(), formatTime(m.startMs),
-        ) { v -> vm.updateProject { p -> p.copy(music = p.music?.copy(startMs = v.toLong())) } }
-    }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("Lặp lại đến hết video", color = Color.White, modifier = Modifier.weight(1f))
-        Switch(
-            checked = m.loop,
-            onCheckedChange = { l -> vm.updateProject { p -> p.copy(music = p.music?.copy(loop = l)) } },
-            colors = SwitchDefaults.colors(checkedTrackColor = Accent),
-        )
-    }
-    val allMuted = vm.project.clips.all { it.volume == 0f }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("Tắt tiếng video gốc", color = Color.White, modifier = Modifier.weight(1f))
-        Switch(
-            checked = allMuted,
-            onCheckedChange = { mute -> vm.updateProject { p -> p.copy(clips = p.clips.map { it.copy(volume = if (mute) 0f else 1f) }) } },
-            colors = SwitchDefaults.colors(checkedTrackColor = Accent),
-        )
-    }
-    Row {
-        OutlinedButton(onClick = onReplace) { Text("Thay nhạc") }
-        Spacer(Modifier.width(8.dp))
-        OutlinedButton(onClick = { vm.removeMusic() }) { Text("Xóa nhạc", color = Color(0xFFFF6B6B)) }
-    }
-}
-
 // ---------- canvas ----------
 
 @Composable
@@ -581,5 +555,322 @@ private fun CanvasPanel(vm: EditorViewModel) {
         Chip("Lấp đầy", p.clips.isNotEmpty() && p.clips.all { it.fill }) {
             vm.updateProject { it.copy(clips = it.clips.map { c -> c.copy(fill = true) }) }
         }
+    }
+}
+
+// ---------- audio tracks ----------
+
+@Composable
+private fun AudioPanel(vm: EditorViewModel) {
+    val a = vm.selectedAudio ?: return
+    val total = vm.project.durationMs
+    Text("${a.kind.label}: ${a.name}", color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    Text(
+        "Trên dòng thời gian: ${formatTime(a.startMs)} → ${formatTime(a.startMs + minOf(a.timelineLengthMs(total), (total - a.startMs).coerceAtLeast(0)))}" +
+            " · độ dài ${formatTime(a.durationMs)}",
+        color = TextDim, fontSize = 12.sp,
+    )
+    LabeledSlider("Âm lượng", a.volume, 0f..2f, "${pct(a.volume)}%") { v ->
+        vm.updateSelectedAudio { it.copy(volume = (v * 20).roundToInt() / 20f) }
+    }
+    LabeledSlider("Tốc độ", a.speed, 0.5f..3f, formatSpeed(a.speed)) { v ->
+        vm.updateSelectedAudio { it.copy(speed = (v * 20).roundToInt() / 20f) }
+    }
+    Row(Modifier.horizontalScroll(rememberScrollState())) {
+        listOf(0.75f, 1f, 1.25f, 1.5f, 2f, 2.5f, 3f).forEach { sp ->
+            Chip(formatSpeed(sp), a.speed == sp) { vm.updateSelectedAudio { it.copy(speed = sp) } }
+        }
+    }
+    Text("Đoạn âm thanh dùng", color = Color.White, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
+    RangeSlider(
+        value = a.sourceStartMs.toFloat()..a.sourceEndMs.toFloat(),
+        onValueChange = { r -> vm.updateSelectedAudio { ProjectOps.trimAudio(it, r.start.toLong(), r.endInclusive.toLong()) } },
+        valueRange = 0f..a.sourceDurationMs.toFloat(),
+        colors = sliderColors(),
+    )
+    Row(Modifier.fillMaxWidth()) {
+        Text(formatTime(a.sourceStartMs), color = TextDim, fontSize = 12.sp, modifier = Modifier.weight(1f))
+        Text(formatTime(a.sourceEndMs), color = TextDim, fontSize = 12.sp)
+    }
+    if (a.kind == AudioKind.MUSIC) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Lặp lại đến hết video", color = Color.White, modifier = Modifier.weight(1f))
+            Switch(
+                checked = a.loop,
+                onCheckedChange = { l -> vm.updateSelectedAudio { it.copy(loop = l) } },
+                colors = SwitchDefaults.colors(checkedTrackColor = Accent),
+            )
+        }
+    }
+    val allMuted = vm.project.clips.all { it.volume == 0f }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("Tắt tiếng video gốc", color = Color.White, modifier = Modifier.weight(1f))
+        Switch(
+            checked = allMuted,
+            onCheckedChange = { mute -> vm.updateProject { p -> p.copy(clips = p.clips.map { it.copy(volume = if (mute) 0f else 1f) }) } },
+            colors = SwitchDefaults.colors(checkedTrackColor = Accent),
+        )
+    }
+    Row(Modifier.horizontalScroll(rememberScrollState())) {
+        OutlinedButton(onClick = { vm.updateSelectedAudio { it.copy(startMs = vm.playheadMs) } }) { Text("Đặt tại đầu phát") }
+        Spacer(Modifier.width(8.dp))
+        if (a.kind == AudioKind.VOICE) {
+            OutlinedButton(onClick = { vm.switchPanel(Panel.VOICE) }) { Text("Sửa giọng đọc") }
+            Spacer(Modifier.width(8.dp))
+        }
+        OutlinedButton(onClick = { vm.deleteSelectedAudio() }) { Text("Xóa", color = Color(0xFFFF6B6B)) }
+    }
+}
+
+// ---------- overlays ----------
+
+@Composable
+private fun OverlayPanel(vm: EditorViewModel) {
+    val o = vm.selectedOverlay ?: return
+    fun set(f: (com.cutviet.editor.model.Overlay) -> com.cutviet.editor.model.Overlay) = vm.updateSelectedOverlay(f)
+    Text(
+        "${formatTime(o.startMs)} → ${formatTime(o.endMs)} · giữ và kéo thanh tím trên dòng thời gian để di chuyển, kéo hai mép trắng để kéo dãn",
+        color = TextDim, fontSize = 11.sp,
+    )
+    LabeledSlider("Kích thước", o.scale, 0.1f..1.5f, "${pct(o.scale)}%") { v -> set { it.copy(scale = v) } }
+    LabeledSlider("Vị trí ngang", o.x, 0f..1f, pct(o.x)) { v -> set { it.copy(x = v) } }
+    LabeledSlider("Vị trí dọc", o.y, 0f..1f, pct(o.y)) { v -> set { it.copy(y = v) } }
+    LabeledSlider("Xoay", o.rotation, -180f..180f, "${o.rotation.roundToInt()}°") { v -> set { it.copy(rotation = v.roundToInt().toFloat()) } }
+    LabeledSlider("Độ trong suốt", o.opacity, 0f..1f, "${pct(o.opacity)}%") { v -> set { it.copy(opacity = v) } }
+    if (o.isImage) {
+        LabeledSlider(
+            "Thời lượng", o.durationMs / 1000f, 0.5f..30f, String.format(Locale.US, "%.1f giây", o.durationMs / 1000f),
+        ) { v -> set { it.copy(trimStartMs = 0, trimEndMs = (v * 1000).toLong()) } }
+    } else {
+        if (o.hasAudio) {
+            LabeledSlider("Âm lượng lớp phủ", o.volume, 0f..2f, "${pct(o.volume)}%") { v ->
+                set { it.copy(volume = (v * 20).roundToInt() / 20f) }
+            }
+        }
+        LabeledSlider("Tốc độ", o.speed, 0.25f..4f, formatSpeed(o.speed)) { v -> set { it.copy(speed = (v * 20).roundToInt() / 20f) } }
+        Text("Cắt lớp phủ", color = Color.White, fontSize = 13.sp)
+        RangeSlider(
+            value = o.trimStartMs.toFloat()..o.trimEndMs.toFloat(),
+            onValueChange = { r -> set { ProjectOps.trimOverlay(it, r.start.toLong(), r.endInclusive.toLong()) } },
+            valueRange = 0f..o.sourceDurationMs.toFloat(),
+            colors = sliderColors(),
+        )
+    }
+    Row(Modifier.horizontalScroll(rememberScrollState()).padding(top = 4.dp)) {
+        OutlinedButton(onClick = { vm.switchPanel(Panel.OVERLAY_KEY) }) { Text("Tẩy nền") }
+        Spacer(Modifier.width(6.dp))
+        OutlinedButton(onClick = { vm.moveOverlayToPlayhead() }) { Text("Đặt tại đầu phát") }
+        Spacer(Modifier.width(6.dp))
+        OutlinedButton(onClick = { set { it.copy(flipH = !it.flipH) } }) { Text("Lật ngang") }
+        Spacer(Modifier.width(6.dp))
+        OutlinedButton(onClick = { set { it.copy(scale = 1f, x = 0.5f, y = 0.5f, rotation = 0f) } }) { Text("Toàn khung") }
+        Spacer(Modifier.width(6.dp))
+        OutlinedButton(onClick = { vm.deleteSelectedOverlay() }) { Text("Xóa", color = Color(0xFFFF6B6B)) }
+    }
+}
+
+private val KEY_COLORS = listOf(
+    "Phông xanh lá" to 0xFF00B140.toInt(),
+    "Phông xanh dương" to 0xFF0047BB.toInt(),
+    "Nền đen" to 0xFF000000.toInt(),
+    "Nền trắng" to 0xFFFFFFFF.toInt(),
+)
+
+@Composable
+private fun OverlayKeyPanel(vm: EditorViewModel) {
+    val o = vm.selectedOverlay ?: return
+    val k = o.chroma
+    fun set(f: (com.cutviet.editor.model.ChromaKey?) -> com.cutviet.editor.model.ChromaKey?) = vm.updateSelectedOverlay { it.copy(chroma = f(it.chroma)) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("Xóa màu nền của lớp phủ", color = Color.White, modifier = Modifier.weight(1f))
+        Switch(
+            checked = k != null,
+            onCheckedChange = { on -> set { if (on) com.cutviet.editor.model.ChromaKey() else null } },
+            colors = SwitchDefaults.colors(checkedTrackColor = Accent),
+        )
+    }
+    if (k == null) {
+        Text(
+            "Dùng cho video quay trên phông xanh lá/xanh dương, hoặc ảnh có nền một màu. Phần nền sẽ trong suốt để lộ video bên dưới.",
+            color = TextDim, fontSize = 12.sp,
+        )
+        return
+    }
+    Row(Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        KEY_COLORS.forEach { (label, c) ->
+            Row(
+                Modifier.padding(end = 8.dp).clip(RoundedCornerShape(16.dp))
+                    .background(if (k.color == c) Accent else Surface2)
+                    .clickable { set { it?.copy(color = c) } }
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(14.dp).clip(CircleShape).background(Color(c)).border(1.dp, Color.Gray, CircleShape))
+                Text(" $label", color = if (k.color == c) Color.Black else Color.White, fontSize = 12.sp)
+            }
+        }
+    }
+    val hsv = FloatArray(3).also { android.graphics.Color.colorToHSV(k.color, it) }
+    LabeledSlider("Màu tùy chỉnh (sắc độ)", hsv[0], 0f..360f, "${hsv[0].roundToInt()}°") { h ->
+        set { it?.copy(color = android.graphics.Color.HSVToColor(floatArrayOf(h, 1f, 0.8f))) }
+    }
+    LabeledSlider("Cường độ tẩy", k.strength, 0f..1f, pct(k.strength)) { v -> set { it?.copy(strength = v) } }
+    LabeledSlider("Làm mềm viền", k.softness, 0f..1f, pct(k.softness)) { v -> set { it?.copy(softness = v) } }
+}
+
+// ---------- voice-over (text to speech) ----------
+
+@Composable
+private fun VoicePanel(vm: EditorViewModel) {
+    val context = LocalContext.current
+    val engine = vm.voice
+    val editing = vm.selectedAudio?.takeIf { it.kind == AudioKind.VOICE }
+    val spec = editing?.voice
+    var text by remember(editing?.id) { mutableStateOf(spec?.text ?: "") }
+    var voiceName by remember(editing?.id) { mutableStateOf(spec?.voiceName) }
+    var pitch by remember(editing?.id) { mutableFloatStateOf(spec?.pitch ?: 1f) }
+    var rate by remember(editing?.id) { mutableFloatStateOf(spec?.rate ?: 1f) }
+    var exactMs by remember { mutableStateOf<Long?>(null) }
+    var measuring by remember { mutableStateOf(false) }
+    var speaking by remember { mutableStateOf(false) }
+    val startMs = editing?.startMs ?: vm.playheadMs
+    val status = engine.status.value
+    val voices = engine.voices.value
+    if (voiceName == null && voices.isNotEmpty()) voiceName = voices.first().name.ifEmpty { null }
+
+    val estimate = remember(text, voiceName, rate, exactMs) { engine.estimateMs(text, voiceName, rate) }
+    val lengthMs = exactMs ?: estimate
+
+    // Measure the exact length by synthesizing in the background once typing pauses.
+    LaunchedEffect(text, voiceName, pitch, rate, status) {
+        exactMs = null
+        if (status != VoiceEngine.Status.READY || text.isBlank()) return@LaunchedEffect
+        delay(900)
+        measuring = true
+        val f = java.io.File(context.cacheDir, "voice_measure.wav")
+        exactMs = engine.synthesize(text, voiceName, pitch, rate, f)
+        measuring = false
+    }
+    LaunchedEffect(startMs, lengthMs, text) {
+        vm.voicePreviewRange = if (text.isBlank()) null else startMs..(startMs + lengthMs)
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            vm.voicePreviewRange = null
+            engine.stop()
+        }
+    }
+
+    when (status) {
+        VoiceEngine.Status.LOADING -> {
+            Text("Đang khởi động bộ đọc tiếng Việt…", color = TextDim)
+            return
+        }
+        VoiceEngine.Status.NO_VIETNAMESE, VoiceEngine.Status.FAILED -> {
+            Text(
+                "Điện thoại chưa có giọng đọc tiếng Việt. Hãy cài \"Dịch vụ lời nói của Google\" (Speech Services by Google) " +
+                    "và tải dữ liệu tiếng Việt, rồi mở lại mục này.",
+                color = Color.White, fontSize = 13.sp,
+            )
+            Row(Modifier.padding(top = 8.dp)) {
+                OutlinedButton(onClick = {
+                    runCatching {
+                        context.startActivity(
+                            android.content.Intent(android.speech.tts.TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA)
+                                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    }
+                }) { Text("Tải giọng tiếng Việt") }
+                Spacer(Modifier.width(8.dp))
+                OutlinedButton(onClick = {
+                    runCatching {
+                        context.startActivity(
+                            android.content.Intent("com.android.settings.TTS_SETTINGS").addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    }
+                }) { Text("Cài đặt giọng nói") }
+            }
+            return
+        }
+        VoiceEngine.Status.READY -> Unit
+    }
+
+    OutlinedTextField(
+        value = text,
+        onValueChange = { if (it.length <= engine.maxInputLength) text = it },
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text("Nhập văn bản cần đọc") },
+        minLines = 2,
+        maxLines = 5,
+    )
+
+    // Duration estimate and where it lands on the video.
+    val endMs = startMs + lengthMs
+    val total = vm.project.durationMs
+    val firstClip = vm.project.clipAt(startMs)?.first
+    val lastClip = vm.project.clipAt((endMs - 1).coerceAtLeast(startMs))?.first
+    Column(Modifier.fillMaxWidth().padding(vertical = 6.dp).background(Surface2, RoundedCornerShape(8.dp)).padding(10.dp)) {
+        Text(
+            when {
+                text.isBlank() -> "Gõ văn bản để xem thời lượng đọc"
+                exactMs != null -> "Thời lượng đọc: ${formatTime(lengthMs)} (đã đo chính xác)"
+                measuring -> "Ước tính: ${formatTime(lengthMs)} · đang đo chính xác…"
+                else -> "Ước tính: ${formatTime(lengthMs)}"
+            },
+            color = Accent, fontWeight = FontWeight.Bold, fontSize = 14.sp,
+        )
+        if (text.isNotBlank()) {
+            Text(
+                "Đọc từ ${formatTime(startMs)} đến ${formatTime(endMs)}" +
+                    (if (firstClip != null && lastClip != null) {
+                        if (firstClip == lastClip) " · trong đoạn ${firstClip + 1}" else " · từ đoạn ${firstClip + 1} đến đoạn ${lastClip + 1}"
+                    } else ""),
+                color = Color.White, fontSize = 12.sp,
+            )
+            if (endMs > total) {
+                Text(
+                    "Dài hơn phần còn lại của video ${formatTime(endMs - total)}. Hãy tăng tốc độ đọc hoặc rút gọn văn bản.",
+                    color = Color(0xFFFFB74D), fontSize = 12.sp,
+                )
+            }
+            Text(
+                "${VoiceEngine.syllableCount(text)} tiếng · ${text.length}/${engine.maxInputLength} ký tự",
+                color = TextDim, fontSize = 11.sp,
+            )
+        }
+    }
+
+    Text("Giọng đọc tiếng Việt", color = Color.White, fontSize = 13.sp)
+    Row(Modifier.horizontalScroll(rememberScrollState())) {
+        voices.forEach { v ->
+            Chip(v.label, (voiceName ?: "") == v.name) { voiceName = v.name.ifEmpty { null } }
+        }
+    }
+    Text("Mẫu giọng", color = Color.White, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
+    Row(Modifier.horizontalScroll(rememberScrollState())) {
+        VoiceEngine.STYLES.forEach { st ->
+            Chip(st.label, kotlin.math.abs(pitch - st.pitch) < 0.01f) { pitch = st.pitch }
+        }
+    }
+    LabeledSlider("Tốc độ đọc", rate, 0.5f..3f, formatSpeed(rate)) { v -> rate = (v * 20).roundToInt() / 20f }
+    Row(Modifier.horizontalScroll(rememberScrollState())) {
+        listOf(0.8f, 1f, 1.25f, 1.5f, 1.75f, 2f, 2.5f, 3f).forEach { r -> Chip(formatSpeed(r), rate == r) { rate = r } }
+    }
+    Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        OutlinedButton(
+            enabled = text.isNotBlank(),
+            onClick = {
+                if (speaking) { engine.stop(); speaking = false } else { engine.speak(text, voiceName, pitch, rate); speaking = true }
+            },
+        ) { Text(if (speaking) "Dừng" else "Nghe thử") }
+        Spacer(Modifier.width(8.dp))
+        Button(
+            enabled = text.isNotBlank() && !vm.busy,
+            onClick = {
+                engine.stop()
+                vm.addVoice(VoiceSpec(text.trim(), voiceName, pitch, rate), startMs, editing?.id) { ok -> if (ok) vm.closePanel() }
+            },
+            colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.Black),
+        ) { Text(if (editing != null) "Cập nhật giọng đọc" else "Thêm vào video") }
     }
 }

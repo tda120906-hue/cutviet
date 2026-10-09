@@ -32,6 +32,12 @@ import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.AspectRatio
+import androidx.compose.material.icons.filled.AutoFixHigh
+import androidx.compose.material.icons.filled.CallSplit
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.VerticalAlignCenter
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
@@ -41,7 +47,6 @@ import androidx.compose.material.icons.filled.Crop
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.EmojiEmotions
 import androidx.compose.material.icons.filled.Flip
-import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -83,6 +88,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.cutviet.editor.media.Exporter
+import com.cutviet.editor.model.AudioKind
 import com.cutviet.editor.ui.formatTime
 import com.cutviet.editor.ui.theme.Accent
 import com.cutviet.editor.ui.theme.TextDim
@@ -113,7 +119,10 @@ private fun EditorContent(vm: EditorViewModel, onBack: () -> Unit) {
         vm.addMedia(it)
     }
     val musicPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) vm.setMusic(uri)
+        if (uri != null) vm.addAudio(uri)
+    }
+    val overlayPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(10)) {
+        vm.addOverlays(it)
     }
     val storagePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) showExport = true
@@ -121,6 +130,7 @@ private fun EditorContent(vm: EditorViewModel, onBack: () -> Unit) {
     }
     fun addMedia() = mediaPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
     fun addMusic() = musicPicker.launch(arrayOf("audio/*", "video/*"))
+    fun addOverlay() = overlayPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
     fun openExport() {
         if (vm.project.clips.isEmpty()) {
             Toast.makeText(context, "Dự án chưa có đoạn nào", Toast.LENGTH_SHORT).show()
@@ -207,9 +217,9 @@ private fun EditorContent(vm: EditorViewModel, onBack: () -> Unit) {
 
         val panel = vm.panel
         if (panel != null) {
-            PanelHost(vm, panel, onReplaceMusic = { addMusic() })
+            PanelHost(vm, panel)
         } else {
-            Toolbar(vm, onAddMedia = { addMedia() }, onAddMusic = { addMusic() })
+            Toolbar(vm, onAddMedia = { addMedia() }, onAddMusic = { addMusic() }, onAddOverlay = { addOverlay() })
         }
     }
 
@@ -251,7 +261,7 @@ private fun TopBar(vm: EditorViewModel, onBack: () -> Unit, onExport: () -> Unit
 private data class Tool(val label: String, val icon: ImageVector, val danger: Boolean = false, val action: () -> Unit)
 
 @Composable
-private fun Toolbar(vm: EditorViewModel, onAddMedia: () -> Unit, onAddMusic: () -> Unit) {
+private fun Toolbar(vm: EditorViewModel, onAddMedia: () -> Unit, onAddMusic: () -> Unit, onAddOverlay: () -> Unit) {
     val clip = vm.selectedClip
     // Opens a clip tool on the selected clip, or on the clip under the playhead.
     fun clipTool(p: Panel) {
@@ -262,11 +272,19 @@ private fun Toolbar(vm: EditorViewModel, onAddMedia: () -> Unit, onAddMusic: () 
         vm.openPanel(p)
     }
     val tools = when {
-        vm.musicSelected && vm.project.music != null -> listOf(
-            Tool("Chỉnh nhạc", Icons.Filled.MusicNote) { vm.openPanel(Panel.MUSIC) },
-            Tool("Thay nhạc", Icons.Filled.LibraryMusic) { onAddMusic() },
-            Tool("Xóa nhạc", Icons.Filled.Delete, danger = true) { vm.removeMusic() },
+        vm.selectedOverlay != null -> listOf(
+            Tool("Chỉnh lớp phủ", Icons.Filled.Tune) { vm.openPanel(Panel.OVERLAY) },
+            Tool("Tẩy nền", Icons.Filled.AutoFixHigh) { vm.openPanel(Panel.OVERLAY_KEY) },
+            Tool("Đến đầu phát", Icons.Filled.VerticalAlignCenter) { vm.moveOverlayToPlayhead() },
+            Tool("Nhân bản", Icons.Filled.ContentCopy) { vm.duplicateSelectedOverlay() },
+            Tool("Xóa lớp phủ", Icons.Filled.Delete, danger = true) { vm.deleteSelectedOverlay() },
         )
+        vm.selectedAudio != null -> buildList {
+            add(Tool("Chỉnh âm thanh", Icons.Filled.GraphicEq) { vm.openPanel(Panel.AUDIO) })
+            if (vm.selectedAudio?.kind == AudioKind.VOICE) add(Tool("Sửa giọng đọc", Icons.Filled.RecordVoiceOver) { vm.openPanel(Panel.VOICE) })
+            add(Tool("Đến đầu phát", Icons.Filled.VerticalAlignCenter) { vm.updateSelectedAudio { it.copy(startMs = vm.playheadMs) } })
+            add(Tool("Xóa", Icons.Filled.Delete, danger = true) { vm.deleteSelectedAudio() })
+        }
         clip != null -> buildList {
             add(Tool("Tách", Icons.Filled.VerticalSplit) { vm.splitAtPlayhead() })
             if (clip.isImage) add(Tool("Thời lượng", Icons.Filled.Timer) { vm.openPanel(Panel.DURATION) })
@@ -274,6 +292,7 @@ private fun Toolbar(vm: EditorViewModel, onAddMedia: () -> Unit, onAddMusic: () 
                 add(Tool("Cắt", Icons.Filled.ContentCut) { vm.openPanel(Panel.TRIM) })
                 add(Tool("Tốc độ", Icons.Filled.Speed) { vm.openPanel(Panel.SPEED) })
                 add(Tool("Âm lượng", Icons.AutoMirrored.Filled.VolumeUp) { vm.openPanel(Panel.VOLUME) })
+                add(Tool("Tách âm thanh", Icons.Filled.CallSplit) { vm.extractAudioFromSelected() })
             }
             add(Tool("Bộ lọc", Icons.Filled.AutoAwesome) { vm.openPanel(Panel.FILTER) })
             add(Tool("Điều chỉnh", Icons.Filled.Tune) { vm.openPanel(Panel.ADJUST) })
@@ -289,9 +308,9 @@ private fun Toolbar(vm: EditorViewModel, onAddMedia: () -> Unit, onAddMusic: () 
         else -> listOf(
             Tool("Thêm", Icons.Filled.AddPhotoAlternate) { onAddMedia() },
             Tool("Tách", Icons.Filled.VerticalSplit) { vm.splitAtPlayhead() },
-            Tool("Âm thanh", Icons.Filled.MusicNote) {
-                if (vm.project.music == null) onAddMusic() else { vm.selectMusic(); vm.openPanel(Panel.MUSIC) }
-            },
+            Tool("Âm thanh", Icons.Filled.MusicNote) { onAddMusic() },
+            Tool("Lớp phủ", Icons.Filled.Layers) { onAddOverlay() },
+            Tool("Giọng đọc AI", Icons.Filled.RecordVoiceOver) { vm.openPanel(Panel.VOICE) },
             Tool("Văn bản", Icons.Filled.Title) { clipTool(Panel.TEXT) },
             Tool("Nhãn dán", Icons.Filled.EmojiEmotions) { clipTool(Panel.STICKER) },
             Tool("Bộ lọc", Icons.Filled.AutoAwesome) { clipTool(Panel.FILTER) },

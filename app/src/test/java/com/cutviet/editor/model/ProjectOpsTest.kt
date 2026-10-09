@@ -71,4 +71,44 @@ class ProjectOpsTest {
         assertEquals(0, c.trimStartMs)
         assertEquals(5_000, c.trimEndMs)
     }
+
+    private fun overlay(ms: Long, startMs: Long = 0) =
+        Overlay(uri = "content://o/$ms", mime = "video/mp4", isImage = false, sourceDurationMs = ms, width = 1280, height = 720, startMs = startMs)
+
+    @Test
+    fun extractAudioMutesClipAndKeepsTiming() {
+        val p = Project(name = "t", clips = listOf(video(2_000), video(6_000).copy(trimStartMs = 1_000, speed = 2f)))
+        val e = ProjectOps.extractAudio(p, 1, "a")
+        assertEquals(0f, e.clips[1].volume)
+        val a = e.audios.single()
+        assertEquals(AudioKind.EXTRACTED, a.kind)
+        assertEquals(2_000, a.startMs)
+        assertEquals(1_000, a.sourceStartMs)
+        assertEquals(e.clips[1].durationMs, a.durationMs)
+    }
+
+    @Test
+    fun stretchingOverlayStartKeepsContentInPlace() {
+        val o = overlay(10_000, startMs = 5_000).copy(trimStartMs = 2_000)
+        val s = ProjectOps.stretchOverlayStart(o, 500)
+        assertEquals(5_500, s.startMs)
+        assertEquals(2_500, s.trimStartMs)
+        assertEquals(o.endMs, s.endMs)
+        // Cannot reveal more than the source has.
+        val back = ProjectOps.stretchOverlayStart(o, -4_000)
+        assertEquals(0, back.trimStartMs)
+        assertEquals(3_000, back.startMs)
+        assertEquals(o.endMs, back.endMs)
+        val end = ProjectOps.stretchOverlayEnd(o, 99_000)
+        assertEquals(10_000, end.trimEndMs)
+    }
+
+    @Test
+    fun lanesNeverOverlap() {
+        val items = listOf(0L to 5_000L, 1_000L to 2_000L, 5_000L to 6_000L, 2_000L to 3_000L)
+        val rows = ProjectOps.lanes(items, { it.first }, { it.second })
+        assertEquals(2, rows.size)
+        for (row in rows) row.zipWithNext().forEach { (a, b) -> assertTrue(a.second <= b.first) }
+        assertEquals(items.size, rows.sumOf { it.size })
+    }
 }

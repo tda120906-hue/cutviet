@@ -1,6 +1,9 @@
 package com.cutviet.editor.media
 
+import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Typeface
+import android.net.Uri
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.AbsoluteSizeSpan
@@ -10,6 +13,10 @@ import android.text.style.StyleSpan
 import androidx.media3.common.C
 import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
+import androidx.media3.common.OverlaySettings
+import androidx.media3.common.VideoCompositorSettings
+import androidx.media3.common.util.Size
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.ChannelMixingAudioProcessor
 import androidx.media3.common.audio.ChannelMixingMatrix
@@ -19,12 +26,12 @@ import androidx.media3.effect.Contrast
 import androidx.media3.effect.Crop
 import androidx.media3.effect.HslAdjustment
 import androidx.media3.effect.OverlayEffect
-import androidx.media3.effect.OverlaySettings
 import androidx.media3.effect.Presentation
 import androidx.media3.effect.RgbAdjustment
 import androidx.media3.effect.RgbFilter
 import androidx.media3.effect.RgbMatrix
 import androidx.media3.effect.ScaleAndRotateTransformation
+import androidx.media3.effect.StaticOverlaySettings
 import androidx.media3.effect.TextOverlay
 import androidx.media3.effect.TextureOverlay
 import androidx.media3.transformer.Composition
@@ -35,10 +42,12 @@ import com.cutviet.editor.model.Adjustments
 import com.cutviet.editor.model.Clip
 import com.cutviet.editor.model.CropSpec
 import com.cutviet.editor.model.FilterPreset
-import com.cutviet.editor.model.Music
+import com.cutviet.editor.model.AudioTrack
+import com.cutviet.editor.model.Overlay
 import com.cutviet.editor.model.Project
 import com.cutviet.editor.model.TextItem
 import com.google.common.collect.ImmutableList
+import java.io.File
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -48,23 +57,181 @@ object CompositionFactory {
     data class Options(
         val width: Int,
         val height: Int,
-        val includeMusic: Boolean = true,
+        val includeAudioTracks: Boolean = true,
+        val includeOverlays: Boolean = true,
         val includeSpeed: Boolean = true,
         val hdrMode: Int = Composition.HDR_MODE_KEEP_HDR,
     )
 
-    fun build(project: Project, o: Options): Composition {
-        val items = project.clips.map { clipItem(it, o) }
-        val sequences = mutableListOf(EditedMediaItemSequence(items, false))
-        val music = project.music
-        if (o.includeMusic && music != null && project.durationMs > 0) {
-            sequences += musicSequence(music, project.durationMs)
-        }
-        return Composition.Builder(sequences)
-            .experimentalSetForceAudioTrack(true)
-            .setHdrMode(o.hdrMode)
+    private val AUDIO_ONLY = setOf(C.TRACK_TYPE_AUDIO)
+    private val VIDEO_ONLY = setOf(C.TRACK_TYPE_VIDEO)
+    private val AUDIO_VIDEO = setOf(C.TRACK_TYPE_AUDIO, C.TRACK_TYPE_VIDEO)
+
+    fun build(context: Context, project: Project, o: Options): Composition {
+        val total = project.durationMs
+        val main = EditedMediaItemSequence.Builder(AUDIO_VIDEO)
+            .addItems(project.clips.map { clipItem(it, o) })
             .build()
+        val videoSequences = mutableListOf<EditedMediaItemSequence>()
+        val audioSequences = mutableListOf<EditedMediaItemSequence>()
+        // Sequence index -> overlay drawn by that sequence (for the compositor settings).
+        val overlayByIndex = HashMap<Int, Overlay>()
+
+        val overlays = if (o.includeOverlays) project.overlays.filter { it.startMs < total && it.durationMs > 0 } else emptyList()
+        if (overlays.isEmpty()) {
+            videoSequences += main
+        } else {
+            // Media3's compositor draws the first sequence on top and takes output timestamps from it.
+            // Sequence 0 is an invisible full-length frame clock at the source frame rate, then the overlays
+            // (newest on top), then the main track at the bottom.
+            val transparent = transparentImageUri(context)
+            val fps = project.clips.filter { !it.isImage }.maxOfOrNull { it.frameRate }?.roundToInt()?.coerceIn(24, 120) ?: 30
+            videoSequences += EditedMediaItemSequence.Builder(VIDEO_ONLY)
+                .addItem(fillerItem(transparent, total, fps))
+                .build()
+            overlays.asReversed().forEach { ov ->
+                val visibleMs = minOf(ov.durationMs, total - ov.startMs)
+                val b = EditedMediaItemSequence.Builder(VIDEO_ONLY)
+                if (ov.startMs > 0) b.addItem(fillerItem(transparent, ov.startMs, 30))
+                b.addItem(overlayItem(ov, visibleMs, o))
+                val after = total - ov.startMs - visibleMs
+                if (after > 0) b.addItem(fillerItem(transparent, after, 30))
+                overlayByIndex[videoSequences.size] = ov
+                videoSequences += b.build()
+                if (ov.hasAudio && !ov.isImage && ov.volume > 0f && o.includeAudioTracks) {
+                    audioSequences += overlayAudioSequence(ov, visibleMs)
+                }
+            }
+            videoSequences += main
+        }
+
+        if (o.includeAudioTracks) {
+            project.audios.forEach { a -> audioTrackSequence(a, total)?.let { audioSequences += it } }
+        }
+
+        val builder = Composition.Builder(videoSequences + audioSequences).setHdrMode(o.hdrMode)
+        if (overlayByIndex.isNotEmpty()) builder.setVideoCompositorSettings(LayerSettings(o.width, o.height, overlayByIndex))
+        return builder.build()
     }
+
+    /** Places each layer: the clock layer is hidden, overlays use their position/scale/opacity, the main track fills the frame. */
+    private class LayerSettings(
+        private val width: Int,
+        private val height: Int,
+        private val overlays: Map<Int, Overlay>,
+    ) : VideoCompositorSettings {
+        private val hidden = StaticOverlaySettings.Builder().setAlphaScale(0f).build()
+        private val full = StaticOverlaySettings.Builder().build()
+        private val settings = overlays.mapValues { (_, ov) ->
+            StaticOverlaySettings.Builder()
+                .setAlphaScale(ov.opacity.coerceIn(0f, 1f))
+                .setScale(ov.scale.coerceIn(0.05f, 4f), ov.scale.coerceIn(0.05f, 4f))
+                .setRotationDegrees(-ov.rotation)
+                .setBackgroundFrameAnchor(ov.x.coerceIn(0f, 1f) * 2 - 1, 1 - ov.y.coerceIn(0f, 1f) * 2)
+                .build()
+        }
+
+        override fun getOutputSize(inputSizes: List<Size>): Size = Size(width, height)
+
+        override fun getOverlaySettings(inputId: Int, presentationTimeUs: Long): OverlaySettings =
+            when (inputId) {
+                0 -> hidden
+                else -> settings[inputId] ?: full
+            }
+    }
+
+    private fun fillerItem(uri: String, durationMs: Long, fps: Int): EditedMediaItem =
+        EditedMediaItem.Builder(
+            MediaItem.Builder().setUri(uri).setMimeType(MimeTypes.IMAGE_PNG).setImageDurationMs(durationMs.coerceAtLeast(1)).build(),
+        ).setFrameRate(fps).build()
+
+    /** A fully transparent PNG used to fill time where a layer shows nothing. */
+    private fun transparentImageUri(context: Context): String {
+        val file = File(context.cacheDir, "transparent_16.png")
+        if (!file.exists()) {
+            val bmp = Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888)
+            bmp.eraseColor(android.graphics.Color.TRANSPARENT)
+            file.outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        }
+        return Uri.fromFile(file).toString()
+    }
+
+    private fun overlayItem(ov: Overlay, visibleMs: Long, o: Options): EditedMediaItem {
+        val builder = MediaItem.Builder().setUri(ov.uri)
+        if (ov.isImage) {
+            builder.setImageDurationMs(visibleMs)
+            ov.mime?.let { builder.setMimeType(it) }
+        } else {
+            builder.setClippingConfiguration(
+                MediaItem.ClippingConfiguration.Builder()
+                    .setStartPositionMs(ov.trimStartMs)
+                    .setEndPositionMs(ov.trimStartMs + (visibleMs * ov.speed).toLong())
+                    .build(),
+            )
+        }
+        val video = mutableListOf<Effect>()
+        if (ov.flipH) video += ScaleAndRotateTransformation.Builder().setScale(-1f, 1f).build()
+        ov.chroma?.let { video += ChromaKeyEffect(it.color, it.strength, it.softness) }
+        // Size the layer to "fit the frame"; the compositor then applies the user's scale.
+        val k = minOf(o.width.toFloat() / ov.width.coerceAtLeast(1), o.height.toFloat() / ov.height.coerceAtLeast(1))
+        video += Presentation.createForWidthAndHeight(
+            even((ov.width * k).roundToInt()), even((ov.height * k).roundToInt()), Presentation.LAYOUT_STRETCH_TO_FIT,
+        )
+        val edited = EditedMediaItem.Builder(builder.build())
+            .setRemoveAudio(true)
+            .setEffects(Effects(emptyList(), video))
+        if (ov.isImage) edited.setFrameRate(30)
+        else if (ov.speed != 1f && o.includeSpeed) edited.setSpeed(ConstantSpeedProvider(ov.speed))
+        return edited.build()
+    }
+
+    private fun overlayAudioSequence(ov: Overlay, visibleMs: Long): EditedMediaItemSequence {
+        val item = MediaItem.Builder().setUri(ov.uri)
+            .setClippingConfiguration(
+                MediaItem.ClippingConfiguration.Builder()
+                    .setStartPositionMs(ov.trimStartMs)
+                    .setEndPositionMs(ov.trimStartMs + (visibleMs * ov.speed).toLong())
+                    .build(),
+            ).build()
+        val edited = EditedMediaItem.Builder(item)
+            .setRemoveVideo(true)
+            .setEffects(Effects(listOfNotNull(volumeProcessor(ov.volume)), emptyList()))
+        if (ov.speed != 1f) edited.setSpeed(ConstantSpeedProvider(ov.speed))
+        val b = EditedMediaItemSequence.Builder(AUDIO_ONLY)
+        if (ov.startMs > 0) b.addGap(ov.startMs * 1000)
+        return b.addItem(edited.build()).build()
+    }
+
+    /** One audio layer, starting at its timeline position and cut at the end of the video. */
+    private fun audioTrackSequence(a: AudioTrack, totalMs: Long): EditedMediaItemSequence? {
+        val available = totalMs - a.startMs
+        if (available < 50 || a.durationMs <= 0) return null
+        val b = EditedMediaItemSequence.Builder(AUDIO_ONLY)
+        if (a.startMs > 0) b.addGap(a.startMs * 1000)
+        var remaining = minOf(a.timelineLengthMs(totalMs), available)
+        var count = 0
+        while (remaining >= 50 && count < 200) {
+            val passMs = minOf(remaining, a.durationMs)
+            val item = MediaItem.Builder().setUri(a.uri)
+                .setClippingConfiguration(
+                    MediaItem.ClippingConfiguration.Builder()
+                        .setStartPositionMs(a.sourceStartMs)
+                        .setEndPositionMs(a.sourceStartMs + (passMs * a.speed).toLong())
+                        .build(),
+                ).build()
+            val edited = EditedMediaItem.Builder(item)
+                .setRemoveVideo(true)
+                .setEffects(Effects(listOfNotNull(volumeProcessor(a.volume)), emptyList()))
+            if (a.speed != 1f) edited.setSpeed(ConstantSpeedProvider(a.speed))
+            b.addItem(edited.build())
+            remaining -= passMs
+            count++
+            if (!a.loop) break
+        }
+        return if (count == 0) null else b.build()
+    }
+
+    private fun even(v: Int) = max(2, v - v % 2)
 
     private fun clipItem(c: Clip, o: Options): EditedMediaItem {
         val builder = MediaItem.Builder().setUri(c.uri)
@@ -84,11 +251,6 @@ object CompositionFactory {
         val video = mutableListOf<Effect>()
         val audio = mutableListOf<AudioProcessor>()
 
-        if (!c.isImage && c.speed != 1f && o.includeSpeed) {
-            val pair = Effects.createExperimentalSpeedChangingEffect(ConstantSpeedProvider(c.speed))
-            audio += pair.first
-            video += pair.second
-        }
         if (c.rotation != 0 || c.flipH || c.flipV) {
             video += ScaleAndRotateTransformation.Builder()
                 .setScale(if (c.flipH) -1f else 1f, if (c.flipV) -1f else 1f)
@@ -112,37 +274,16 @@ object CompositionFactory {
 
         val edited = EditedMediaItem.Builder(mediaItem)
             .setEffects(Effects(audio, video))
-        if (c.isImage) {
-            edited.setFrameRate(30)
-            @Suppress("DEPRECATION")
-            edited.setDurationUs(c.durationMs * 1000)
-        }
+        if (c.isImage) edited.setFrameRate(30)
+        else if (c.speed != 1f && o.includeSpeed) edited.setSpeed(ConstantSpeedProvider(c.speed))
         return edited.build()
-    }
-
-    private fun musicSequence(m: Music, videoDurationMs: Long): EditedMediaItemSequence {
-        val available = m.sourceDurationMs - m.startMs
-        val end = if (m.loop) m.sourceDurationMs else m.startMs + minOf(available, videoDurationMs)
-        val item = MediaItem.Builder().setUri(m.uri)
-            .setClippingConfiguration(
-                MediaItem.ClippingConfiguration.Builder()
-                    .setStartPositionMs(m.startMs.coerceAtLeast(0))
-                    .setEndPositionMs(max(m.startMs + 100, end))
-                    .build(),
-            ).build()
-        val audio = listOfNotNull(volumeProcessor(m.volume))
-        val edited = EditedMediaItem.Builder(item)
-            .setRemoveVideo(true)
-            .setEffects(Effects(audio, emptyList()))
-            .build()
-        return EditedMediaItemSequence(listOf(edited), m.loop)
     }
 
     private fun volumeProcessor(volume: Float): AudioProcessor? {
         if (volume == 1f) return null
         return ChannelMixingAudioProcessor().apply {
-            putChannelMixingMatrix(ChannelMixingMatrix.create(1, 1).scaleBy(volume))
-            putChannelMixingMatrix(ChannelMixingMatrix.create(2, 2).scaleBy(volume))
+            putChannelMixingMatrix(ChannelMixingMatrix.createForConstantGain(1, 1).scaleBy(volume))
+            putChannelMixingMatrix(ChannelMixingMatrix.createForConstantGain(2, 2).scaleBy(volume))
         }
     }
 
@@ -214,7 +355,7 @@ object CompositionFactory {
             if (t.bold) text.setSpan(StyleSpan(Typeface.BOLD), 0, text.length, all)
             t.background?.let { text.setSpan(BackgroundColorSpan(it), 0, text.length, all) }
         }
-        val settings = OverlaySettings.Builder()
+        val settings = StaticOverlaySettings.Builder()
             .setBackgroundFrameAnchor(t.x.coerceIn(0f, 1f) * 2 - 1, 1 - t.y.coerceIn(0f, 1f) * 2)
             .build()
         return TextOverlay.createStaticTextOverlay(text, settings)

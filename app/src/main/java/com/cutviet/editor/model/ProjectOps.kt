@@ -63,6 +63,92 @@ object ProjectOps {
         return c.copy(trimStartMs = s, trimEndMs = e)
     }
 
+    /**
+     * Moves the audio of clip [index] onto its own track at the same timeline position and mutes the clip,
+     * so the sound can be moved, trimmed and adjusted on its own.
+     */
+    fun extractAudio(p: Project, index: Int, name: String): Project {
+        val c = p.clips.getOrNull(index) ?: return p
+        if (c.isImage || !c.hasAudio) return p
+        val track = AudioTrack(
+            kind = AudioKind.EXTRACTED, uri = c.uri, name = name, sourceDurationMs = c.sourceDurationMs,
+            sourceStartMs = c.trimStartMs, sourceEndMs = c.trimEndMs, startMs = p.clipStartMs(index),
+            volume = if (c.volume == 0f) 1f else c.volume, speed = c.speed,
+        )
+        return updateClip(p, index) { it.copy(volume = 0f) }.copy(audios = p.audios + track)
+    }
+
+    fun updateOverlay(p: Project, id: String, f: (Overlay) -> Overlay): Project =
+        p.copy(overlays = p.overlays.map { if (it.id == id) f(it) else it })
+
+    fun updateAudio(p: Project, id: String, f: (AudioTrack) -> AudioTrack): Project =
+        p.copy(audios = p.audios.map { if (it.id == id) f(it) else it })
+
+    /** Trims an overlay's source range, keeping it inside the source and at least [MIN_CLIP_MS] long. */
+    fun trimOverlay(o: Overlay, startMs: Long, endMs: Long): Overlay {
+        if (o.isImage) return o.copy(trimStartMs = 0, trimEndMs = max(MIN_CLIP_MS, endMs - startMs))
+        val s = startMs.coerceIn(0, max(0, o.sourceDurationMs - MIN_CLIP_MS))
+        val e = endMs.coerceIn(s + MIN_CLIP_MS, o.sourceDurationMs)
+        return o.copy(trimStartMs = s, trimEndMs = e)
+    }
+
+    fun trimAudio(a: AudioTrack, startMs: Long, endMs: Long): AudioTrack {
+        val s = startMs.coerceIn(0, max(0, a.sourceDurationMs - MIN_CLIP_MS))
+        val e = endMs.coerceIn(s + MIN_CLIP_MS, a.sourceDurationMs)
+        return a.copy(sourceStartMs = s, sourceEndMs = e)
+    }
+
+    /**
+     * Drags the left edge of an overlay on the timeline by [deltaMs]: the start moves and the source
+     * start moves with it, so the content stays anchored in time (like stretching a layer in CapCut).
+     */
+    fun stretchOverlayStart(o: Overlay, deltaMs: Long): Overlay {
+        val newStart = (o.startMs + deltaMs).coerceAtLeast(0)
+        val d = newStart - o.startMs
+        if (o.isImage) {
+            val dur = (o.trimmedMs - d).coerceAtLeast(MIN_CLIP_MS)
+            return o.copy(startMs = o.endMs - dur, trimStartMs = 0, trimEndMs = dur)
+        }
+        val src = (o.trimStartMs + (d * o.speed).toLong()).coerceIn(0, o.trimEndMs - MIN_CLIP_MS)
+        val realDelta = ((src - o.trimStartMs) / o.speed).toLong()
+        return o.copy(startMs = o.startMs + realDelta, trimStartMs = src)
+    }
+
+    /** Drags the right edge of an overlay by [deltaMs]. */
+    fun stretchOverlayEnd(o: Overlay, deltaMs: Long): Overlay {
+        if (o.isImage) return o.copy(trimStartMs = 0, trimEndMs = (o.trimmedMs + deltaMs).coerceAtLeast(MIN_CLIP_MS))
+        val e = (o.trimEndMs + (deltaMs * o.speed).toLong()).coerceIn(o.trimStartMs + MIN_CLIP_MS, o.sourceDurationMs)
+        return o.copy(trimEndMs = e)
+    }
+
+    fun stretchAudioStart(a: AudioTrack, deltaMs: Long): AudioTrack {
+        val newStart = (a.startMs + deltaMs).coerceAtLeast(0)
+        val d = newStart - a.startMs
+        val src = (a.sourceStartMs + (d * a.speed).toLong()).coerceIn(0, a.sourceEndMs - MIN_CLIP_MS)
+        val realDelta = ((src - a.sourceStartMs) / a.speed).toLong()
+        return a.copy(startMs = a.startMs + realDelta, sourceStartMs = src)
+    }
+
+    fun stretchAudioEnd(a: AudioTrack, deltaMs: Long): AudioTrack {
+        val e = (a.sourceEndMs + (deltaMs * a.speed).toLong()).coerceIn(a.sourceStartMs + MIN_CLIP_MS, a.sourceDurationMs)
+        return a.copy(sourceEndMs = e)
+    }
+
+    /** Puts items into rows so that items in the same row never overlap in time. */
+    fun <T> lanes(items: List<T>, start: (T) -> Long, end: (T) -> Long): List<List<T>> {
+        val rows = mutableListOf<MutableList<T>>()
+        val rowEnds = mutableListOf<Long>()
+        for (item in items.sortedBy(start)) {
+            val i = rowEnds.indexOfFirst { it <= start(item) }
+            if (i >= 0) {
+                rows[i].add(item); rowEnds[i] = end(item)
+            } else {
+                rows.add(mutableListOf(item)); rowEnds.add(end(item))
+            }
+        }
+        return rows
+    }
+
     /** Output canvas size at original quality: keeps the long side of the first clip. */
     fun canvasSize(p: Project): Pair<Int, Int> {
         val base = p.clips.firstOrNull { !it.isImage } ?: p.clips.firstOrNull()

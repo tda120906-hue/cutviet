@@ -35,11 +35,33 @@ class ProjectStore(context: Context) {
             put("createdAt", p.createdAt)
             put("updatedAt", p.updatedAt)
             put("clips", JSONArray().apply { p.clips.forEach { put(clipJson(it)) } })
-            p.music?.let { m ->
-                put("music", JSONObject().apply {
-                    put("uri", m.uri); put("name", m.name); put("sourceDurationMs", m.sourceDurationMs)
-                    put("startMs", m.startMs); put("volume", m.volume.toDouble()); put("loop", m.loop)
-                    put("fadeOut", m.fadeOut)
+            put("overlays", JSONArray().apply { p.overlays.forEach { put(overlayJson(it)) } })
+            put("audios", JSONArray().apply { p.audios.forEach { put(audioJson(it)) } })
+        }
+
+        private fun overlayJson(o: Overlay) = JSONObject().apply {
+            put("id", o.id); put("uri", o.uri); put("mime", o.mime ?: ""); put("isImage", o.isImage)
+            put("sourceDurationMs", o.sourceDurationMs); put("width", o.width); put("height", o.height)
+            put("hasAudio", o.hasAudio); put("trimStartMs", o.trimStartMs); put("trimEndMs", o.trimEndMs)
+            put("startMs", o.startMs); put("speed", o.speed.toDouble()); put("volume", o.volume.toDouble())
+            put("x", o.x.toDouble()); put("y", o.y.toDouble()); put("scale", o.scale.toDouble())
+            put("rotation", o.rotation.toDouble()); put("opacity", o.opacity.toDouble()); put("flipH", o.flipH)
+            o.chroma?.let { k ->
+                put("chroma", JSONObject().apply {
+                    put("color", k.color); put("strength", k.strength.toDouble()); put("softness", k.softness.toDouble())
+                })
+            }
+        }
+
+        private fun audioJson(a: AudioTrack) = JSONObject().apply {
+            put("id", a.id); put("kind", a.kind.name); put("uri", a.uri); put("name", a.name)
+            put("sourceDurationMs", a.sourceDurationMs); put("sourceStartMs", a.sourceStartMs)
+            put("sourceEndMs", a.sourceEndMs); put("startMs", a.startMs); put("volume", a.volume.toDouble())
+            put("speed", a.speed.toDouble()); put("loop", a.loop)
+            a.voice?.let { v ->
+                put("voice", JSONObject().apply {
+                    put("text", v.text); put("voiceName", v.voiceName ?: ""); put("pitch", v.pitch.toDouble())
+                    put("rate", v.rate.toDouble())
                 })
             }
         }
@@ -72,20 +94,56 @@ class ProjectStore(context: Context) {
 
         fun fromJson(o: JSONObject): Project {
             val clips = o.getJSONArray("clips").let { a -> (0 until a.length()).map { clipFrom(a.getJSONObject(it)) } }
-            val music = o.optJSONObject("music")?.let { m ->
-                Music(
-                    uri = m.getString("uri"), name = m.optString("name"),
-                    sourceDurationMs = m.getLong("sourceDurationMs"), startMs = m.optLong("startMs"),
+            val audios = mutableListOf<AudioTrack>()
+            // Drafts saved before audio tracks existed had a single "music" entry.
+            o.optJSONObject("music")?.let { m ->
+                val d = m.getLong("sourceDurationMs")
+                audios += AudioTrack(
+                    kind = AudioKind.MUSIC, uri = m.getString("uri"), name = m.optString("name"),
+                    sourceDurationMs = d, sourceStartMs = m.optLong("startMs"), sourceEndMs = d,
                     volume = m.optDouble("volume", 1.0).toFloat(), loop = m.optBoolean("loop"),
-                    fadeOut = m.optBoolean("fadeOut"),
                 )
             }
+            o.optJSONArray("audios")?.let { a -> for (i in 0 until a.length()) audios += audioFrom(a.getJSONObject(i)) }
+            val overlays = o.optJSONArray("overlays")?.let { a -> (0 until a.length()).map { overlayFrom(a.getJSONObject(it)) } }.orEmpty()
             return Project(
-                id = o.getString("id"), name = o.optString("name", "Dự án"), clips = clips, music = music,
+                id = o.getString("id"), name = o.optString("name", "Dự án"), clips = clips, overlays = overlays, audios = audios,
                 aspect = runCatching { AspectRatio.valueOf(o.optString("aspect")) }.getOrDefault(AspectRatio.ORIGINAL),
                 createdAt = o.optLong("createdAt"), updatedAt = o.optLong("updatedAt"),
             )
         }
+
+        private fun overlayFrom(o: JSONObject): Overlay = Overlay(
+            id = o.getString("id"), uri = o.getString("uri"), mime = o.optString("mime").ifEmpty { null },
+            isImage = o.getBoolean("isImage"), sourceDurationMs = o.getLong("sourceDurationMs"),
+            width = o.getInt("width"), height = o.getInt("height"), hasAudio = o.optBoolean("hasAudio", true),
+            trimStartMs = o.getLong("trimStartMs"), trimEndMs = o.getLong("trimEndMs"), startMs = o.optLong("startMs"),
+            speed = o.optDouble("speed", 1.0).toFloat(), volume = o.optDouble("volume", 1.0).toFloat(),
+            x = o.optDouble("x", 0.5).toFloat(), y = o.optDouble("y", 0.5).toFloat(),
+            scale = o.optDouble("scale", 0.5).toFloat(), rotation = o.optDouble("rotation", 0.0).toFloat(),
+            opacity = o.optDouble("opacity", 1.0).toFloat(), flipH = o.optBoolean("flipH"),
+            chroma = o.optJSONObject("chroma")?.let { k ->
+                ChromaKey(
+                    color = k.optInt("color", 0xFF00FF00.toInt()), strength = k.optDouble("strength", 0.35).toFloat(),
+                    softness = k.optDouble("softness", 0.15).toFloat(),
+                )
+            },
+        )
+
+        private fun audioFrom(o: JSONObject): AudioTrack = AudioTrack(
+            id = o.getString("id"),
+            kind = runCatching { AudioKind.valueOf(o.getString("kind")) }.getOrDefault(AudioKind.MUSIC),
+            uri = o.getString("uri"), name = o.optString("name"), sourceDurationMs = o.getLong("sourceDurationMs"),
+            sourceStartMs = o.optLong("sourceStartMs"), sourceEndMs = o.getLong("sourceEndMs"),
+            startMs = o.optLong("startMs"), volume = o.optDouble("volume", 1.0).toFloat(),
+            speed = o.optDouble("speed", 1.0).toFloat(), loop = o.optBoolean("loop"),
+            voice = o.optJSONObject("voice")?.let { v ->
+                VoiceSpec(
+                    text = v.optString("text"), voiceName = v.optString("voiceName").ifEmpty { null },
+                    pitch = v.optDouble("pitch", 1.0).toFloat(), rate = v.optDouble("rate", 1.0).toFloat(),
+                )
+            },
+        )
 
         private fun clipFrom(o: JSONObject): Clip {
             val textsArr = o.optJSONArray("texts") ?: JSONArray()

@@ -13,6 +13,13 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.cutviet.editor.media.Exporter
 import com.cutviet.editor.media.MediaProbe
+import com.cutviet.editor.media.VoiceEngine
+import com.cutviet.editor.model.AudioKind
+import com.cutviet.editor.model.AudioTrack
+import com.cutviet.editor.model.Overlay
+import com.cutviet.editor.model.VoiceSpec
+import com.cutviet.editor.model.newId
+import java.io.File
 import com.cutviet.editor.media.PreviewController
 import com.cutviet.editor.model.Clip
 import com.cutviet.editor.model.ExportSettings
@@ -36,7 +43,10 @@ enum class Panel(val title: String) {
     ADJUST("Điều chỉnh"),
     TEXT("Văn bản"),
     STICKER("Nhãn dán"),
-    MUSIC("Âm nhạc"),
+    AUDIO("Âm thanh"),
+    OVERLAY("Lớp phủ"),
+    OVERLAY_KEY("Tẩy nền lớp phủ"),
+    VOICE("Giọng đọc AI"),
     CANVAS("Tỉ lệ khung hình"),
     DURATION("Thời lượng ảnh"),
 }
@@ -49,7 +59,13 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
     var project by mutableStateOf(store.load(projectId) ?: Project(id = projectId, name = "Dự án"))
         private set
     var selected by mutableStateOf<Int?>(null)
-    var musicSelected by mutableStateOf(false)
+    var selectedOverlayId by mutableStateOf<String?>(null)
+        private set
+    var selectedAudioId by mutableStateOf<String?>(null)
+        private set
+    val voice = VoiceEngine(app)
+    /** Timeline range the voice-over being typed will cover (shown on the timeline). */
+    var voicePreviewRange by mutableStateOf<LongRange?>(null)
     var panel by mutableStateOf<Panel?>(null)
         private set
     var editingTextId by mutableStateOf<String?>(null)
@@ -71,6 +87,8 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
     private var saveJob: Job? = null
 
     val selectedClip: Clip? get() = selected?.let { project.clips.getOrNull(it) }
+    val selectedOverlay: Overlay? get() = selectedOverlayId?.let { id -> project.overlays.firstOrNull { it.id == id } }
+    val selectedAudio: AudioTrack? get() = selectedAudioId?.let { id -> project.audios.firstOrNull { it.id == id } }
 
     init {
         preview.setProject(project, immediate = true)
@@ -112,7 +130,8 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
 
     private fun afterHistoryJump() {
         selected?.let { if (it !in project.clips.indices) selected = null }
-        if (project.music == null) musicSelected = false
+        if (selectedOverlay == null) selectedOverlayId = null
+        if (selectedAudio == null) selectedAudioId = null
         preview.setProject(project, immediate = true)
         scheduleSave()
     }
@@ -140,6 +159,11 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
         panel = p
     }
 
+    /** Replaces the open panel with another one, keeping a single undo step for both. */
+    fun switchPanel(p: Panel) {
+        if (panel == null) openPanel(p) else panel = p
+    }
+
     fun closePanel() {
         // Drop the snapshot if the panel changed nothing.
         if (undoStack.lastOrNull() == project) {
@@ -153,15 +177,30 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
     // ---- selection ----
 
     fun select(index: Int?) {
-        musicSelected = false
+        selectedOverlayId = null
+        selectedAudioId = null
         selected = if (selected == index) null else index
         if (panel != null) closePanel()
     }
 
-    fun selectMusic() {
+    fun selectOverlay(id: String?) {
         selected = null
-        musicSelected = !musicSelected
+        selectedAudioId = null
+        selectedOverlayId = if (selectedOverlayId == id) null else id
         if (panel != null) closePanel()
+    }
+
+    fun selectAudio(id: String?) {
+        selected = null
+        selectedOverlayId = null
+        selectedAudioId = if (selectedAudioId == id) null else id
+        if (panel != null) closePanel()
+    }
+
+    fun clearSelection() {
+        selected = null
+        selectedOverlayId = null
+        selectedAudioId = null
     }
 
     // ---- clip operations ----
@@ -235,28 +274,153 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
         }
     }
 
-    fun setMusic(uri: Uri) {
+    /** Adds an audio file (or the sound of a video file) as a new track at the playhead. */
+    fun addAudio(uri: Uri, kind: AudioKind = AudioKind.MUSIC) {
         busy = true
         viewModelScope.launch {
             val app = getApplication<Application>()
-            val music = withContext(Dispatchers.IO) {
+            val start = if (project.audios.none { it.kind == AudioKind.MUSIC } && kind == AudioKind.MUSIC) 0L else playheadMs
+            val track = withContext(Dispatchers.IO) {
                 MediaProbe.persist(app, uri)
-                MediaProbe.probeMusic(app, uri)
+                MediaProbe.probeAudio(app, uri, kind, start)
             }
             busy = false
-            if (music == null) {
-                toast = "Không đọc được tệp âm thanh"
+            if (track == null) {
+                toast = "Không đọc được âm thanh từ tệp này"
                 return@launch
             }
-            commit(project.copy(music = music))
-            musicSelected = true
+            commit(project.copy(audios = project.audios + track))
+            clearSelection()
+            selectedAudioId = track.id
         }
     }
 
-    fun removeMusic() {
-        commit(project.copy(music = null))
-        musicSelected = false
-        if (panel == Panel.MUSIC) closePanel()
+    fun deleteSelectedAudio() {
+        val id = selectedAudioId ?: return
+        commit(project.copy(audios = project.audios.filterNot { it.id == id }))
+        selectedAudioId = null
+        if (panel != null) closePanel()
+    }
+
+    fun updateSelectedAudio(f: (AudioTrack) -> AudioTrack) {
+        val id = selectedAudioId ?: return
+        commit(ProjectOps.updateAudio(project, id, f), record = panel == null)
+    }
+
+    /** Separates the selected clip's sound onto its own track ("Tách âm thanh"). */
+    fun extractAudioFromSelected() {
+        val i = selected ?: return
+        val clip = project.clips.getOrNull(i) ?: return
+        if (clip.isImage || !clip.hasAudio) {
+            toast = "Đoạn này không có âm thanh"
+            return
+        }
+        val before = project.audios.map { it.id }.toSet()
+        commit(ProjectOps.extractAudio(project, i, "Âm thanh đoạn ${i + 1}"))
+        project.audios.firstOrNull { it.id !in before }?.let {
+            clearSelection()
+            selectedAudioId = it.id
+        }
+        toast = "Đã tách âm thanh ra rãnh riêng"
+    }
+
+    // ---- overlays ----
+
+    fun addOverlays(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        busy = true
+        viewModelScope.launch {
+            val app = getApplication<Application>()
+            val start = playheadMs.coerceIn(0, (project.durationMs - 100).coerceAtLeast(0))
+            val list = withContext(Dispatchers.IO) {
+                uris.mapNotNull { uri ->
+                    MediaProbe.persist(app, uri)
+                    MediaProbe.probeOverlay(app, uri, start)
+                }
+            }
+            busy = false
+            if (list.isEmpty()) {
+                toast = "Không đọc được tệp đã chọn"
+                return@launch
+            }
+            // Images default to the rest of the current clip, capped at 5 s.
+            val fixed = list.map { o ->
+                if (o.isImage) {
+                    val d = (project.durationMs - start).coerceIn(ProjectOps.MIN_CLIP_MS, 5000)
+                    o.copy(trimStartMs = 0, trimEndMs = d)
+                } else o
+            }
+            commit(project.copy(overlays = project.overlays + fixed))
+            clearSelection()
+            selectedOverlayId = fixed.last().id
+        }
+    }
+
+    fun updateSelectedOverlay(f: (Overlay) -> Overlay) {
+        val id = selectedOverlayId ?: return
+        commit(ProjectOps.updateOverlay(project, id, f), record = panel == null)
+    }
+
+    fun deleteSelectedOverlay() {
+        val id = selectedOverlayId ?: return
+        commit(project.copy(overlays = project.overlays.filterNot { it.id == id }))
+        selectedOverlayId = null
+        if (panel != null) closePanel()
+    }
+
+    fun duplicateSelectedOverlay() {
+        val o = selectedOverlay ?: return
+        val copy = o.copy(id = newId(), x = (o.x + 0.05f).coerceAtMost(1f), y = (o.y + 0.05f).coerceAtMost(1f))
+        commit(project.copy(overlays = project.overlays + copy))
+        selectedOverlayId = copy.id
+    }
+
+    /** Moves the selected overlay so it starts at the playhead. */
+    fun moveOverlayToPlayhead() = updateSelectedOverlay { it.copy(startMs = playheadMs) }
+
+    /** Called when a drag on the timeline starts, so the whole drag is one undo step. */
+    fun beginDrag() {
+        preview.pause()
+        pushHistory()
+    }
+
+    /** Live update during a timeline drag (no history entry per frame). */
+    fun dragUpdate(p: Project) {
+        project = p.copy(updatedAt = System.currentTimeMillis())
+        preview.setProject(project)
+        scheduleSave()
+    }
+
+    // ---- voice-over ----
+
+    /**
+     * Generates speech for [spec] and adds it as a voice track at [startMs], replacing [replaceId]
+     * when editing an existing voice-over.
+     */
+    fun addVoice(spec: VoiceSpec, startMs: Long, replaceId: String?, onDone: (Boolean) -> Unit) {
+        busy = true
+        viewModelScope.launch {
+            val app = getApplication<Application>()
+            val file = File(File(app.filesDir, "voice"), "voice_${System.currentTimeMillis()}.wav")
+            val ms = voice.synthesize(spec.text, spec.voiceName, spec.pitch, spec.rate, file)
+            busy = false
+            if (ms == null || ms <= 0) {
+                toast = "Không tạo được giọng đọc. Kiểm tra giọng tiếng Việt trong cài đặt chuyển văn bản thành giọng nói."
+                onDone(false)
+                return@launch
+            }
+            val name = spec.text.trim().replace(Regex("\\s+"), " ").take(40)
+            val old = replaceId?.let { id -> project.audios.firstOrNull { it.id == id } }
+            val track = AudioTrack(
+                id = old?.id ?: newId(), kind = AudioKind.VOICE, uri = Uri.fromFile(file).toString(), name = name,
+                sourceDurationMs = ms, startMs = old?.startMs ?: startMs, volume = old?.volume ?: 1f, voice = spec,
+            )
+            val audios = if (old != null) project.audios.map { if (it.id == old.id) track else it } else project.audios + track
+            commit(project.copy(audios = audios), record = panel == null)
+            clearSelection()
+            selectedAudioId = track.id
+            onDone(true)
+        }
     }
 
     // ---- text ----
@@ -298,6 +462,7 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
     }
 
     override fun onCleared() {
+        voice.shutdown()
         saveNow()
         exporter.cancel()
         preview.release()

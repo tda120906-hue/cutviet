@@ -108,21 +108,91 @@ data class Clip(
         if (isImage) offsetMs else trimStartMs + (offsetMs * speed).toLong()
 }
 
-data class Music(
+enum class AudioKind(val label: String) {
+    MUSIC("Nhạc"),
+    EXTRACTED("Âm thanh tách"),
+    VOICE("Giọng đọc"),
+}
+
+/** Settings used to generate a text-to-speech track, kept so it can be edited and regenerated. */
+data class VoiceSpec(
+    val text: String,
+    val voiceName: String?,
+    val pitch: Float = 1f,
+    val rate: Float = 1f,
+)
+
+/** An audio layer placed on the timeline (music, audio extracted from a clip, or a voice-over). */
+data class AudioTrack(
+    val id: String = newId(),
+    val kind: AudioKind,
     val uri: String,
     val name: String,
     val sourceDurationMs: Long,
+    val sourceStartMs: Long = 0,
+    val sourceEndMs: Long = sourceDurationMs,
+    /** Position on the timeline where this track starts. */
     val startMs: Long = 0,
     val volume: Float = 1f,
+    val speed: Float = 1f,
+    /** Repeat until the end of the video (music only). */
     val loop: Boolean = false,
-    val fadeOut: Boolean = false,
+    val voice: VoiceSpec? = null,
+) {
+    /** Length of one pass on the timeline. */
+    val durationMs: Long get() = ((sourceEndMs - sourceStartMs) / speed).toLong()
+
+    /** Length on the timeline including looping, before clipping to the project end. */
+    fun timelineLengthMs(projectDurationMs: Long): Long =
+        if (loop) (projectDurationMs - startMs).coerceAtLeast(0) else durationMs
+}
+
+/** Colour key used to remove a solid background (green/blue screen) from an overlay. */
+data class ChromaKey(
+    val color: Int = 0xFF00FF00.toInt(),
+    /** 0..1, how far from the key colour still counts as background. */
+    val strength: Float = 0.35f,
+    /** 0..1, width of the soft edge. */
+    val softness: Float = 0.15f,
 )
+
+/** A picture-in-picture layer (video or image) drawn above the main track. */
+data class Overlay(
+    val id: String = newId(),
+    val uri: String,
+    val mime: String?,
+    val isImage: Boolean,
+    val sourceDurationMs: Long,
+    val width: Int,
+    val height: Int,
+    val hasAudio: Boolean = true,
+    val trimStartMs: Long = 0,
+    val trimEndMs: Long = sourceDurationMs,
+    val startMs: Long = 0,
+    val speed: Float = 1f,
+    val volume: Float = 1f,
+    /** Centre position, 0..1 from the top-left of the frame. */
+    val x: Float = 0.5f,
+    val y: Float = 0.5f,
+    /** Size relative to "fit the whole frame". */
+    val scale: Float = 0.5f,
+    /** Clockwise degrees. */
+    val rotation: Float = 0f,
+    val opacity: Float = 1f,
+    val flipH: Boolean = false,
+    val chroma: ChromaKey? = null,
+) {
+    val trimmedMs: Long get() = trimEndMs - trimStartMs
+    val durationMs: Long get() = if (isImage) trimmedMs else (trimmedMs / speed).toLong()
+    val endMs: Long get() = startMs + durationMs
+}
 
 data class Project(
     val id: String = newId(),
     val name: String,
     val clips: List<Clip> = emptyList(),
-    val music: Music? = null,
+    val overlays: List<Overlay> = emptyList(),
+    val audios: List<AudioTrack> = emptyList(),
     val aspect: AspectRatio = AspectRatio.ORIGINAL,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),

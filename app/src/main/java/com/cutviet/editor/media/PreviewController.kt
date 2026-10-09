@@ -27,7 +27,8 @@ class PreviewController(private val context: Context) {
     private var project: Project? = null
     private var composition: CompositionPlayer? = null
     private var exo: ExoPlayer? = null
-    private var withMusic = true
+    private var withAudio = true
+    private var withOverlays = true
     private var withSpeed = true
     private val handler = Handler(Looper.getMainLooper())
     private var pendingRebuild: Runnable? = null
@@ -75,8 +76,12 @@ class PreviewController(private val context: Context) {
             }
             val size = ProjectOps.fitLongSide(ProjectOps.canvasSize(p), 1280)
             val comp = CompositionFactory.build(
+                context,
                 p,
-                CompositionFactory.Options(size.first, size.second, includeMusic = withMusic, includeSpeed = withSpeed),
+                CompositionFactory.Options(
+                    size.first, size.second,
+                    includeAudioTracks = withAudio, includeOverlays = withOverlays, includeSpeed = withSpeed,
+                ),
             )
             cp.setComposition(comp)
             cp.prepare()
@@ -89,11 +94,17 @@ class PreviewController(private val context: Context) {
     private fun handleError(e: Exception) {
         val p = project ?: return
         val position = positionMs()
-        // Step down: first drop music, then speed effects, then use the simple player.
+        // Step down: drop overlays, then extra audio, then speed effects, then use the simple player.
         when {
-            !simpleMode.value && withMusic && p.music != null -> {
-                withMusic = false
-                error.value = "Xem trước không phát được nhạc nền trên máy này (vẫn có trong video xuất)."
+            !simpleMode.value && withOverlays && p.overlays.isNotEmpty() -> {
+                withOverlays = false
+                error.value = "Máy này không xem trước được lớp phủ (vẫn có trong video xuất)."
+                releaseComposition()
+                rebuild(position)
+            }
+            !simpleMode.value && withAudio && (p.audios.isNotEmpty() || p.overlays.isNotEmpty()) -> {
+                withAudio = false
+                error.value = "Xem trước không phát được các rãnh âm thanh trên máy này (vẫn có trong video xuất)."
                 releaseComposition()
                 rebuild(position)
             }

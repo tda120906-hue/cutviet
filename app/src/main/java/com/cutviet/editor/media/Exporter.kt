@@ -10,6 +10,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
 import androidx.media3.common.MimeTypes
+import androidx.media3.transformer.AudioEncoderSettings
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.DefaultEncoderFactory
 import androidx.media3.transformer.ExportException
@@ -53,6 +54,7 @@ class Exporter(private val context: Context) {
         val (w, h) = outputSize(project, settings)
         val bitrate = ProjectOps.targetBitrate(project, w to h, settings.quality)
         val composition = CompositionFactory.build(
+            context,
             project,
             CompositionFactory.Options(
                 width = w, height = h,
@@ -67,6 +69,7 @@ class Exporter(private val context: Context) {
         val mime = if (settings.codec == ExportCodec.H265) MimeTypes.VIDEO_H265 else MimeTypes.VIDEO_H264
         val encoderFactory = DefaultEncoderFactory.Builder(context)
             .setRequestedVideoEncoderSettings(VideoEncoderSettings.Builder().setBitrate(bitrate).build())
+            .setRequestedAudioEncoderSettings(AudioEncoderSettings.Builder().setBitrate(256_000).build())
             .setEnableFallback(true)
             .build()
         val t = Transformer.Builder(context)
