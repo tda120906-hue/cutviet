@@ -11,20 +11,19 @@ jobs:
           for a in media3-transformer; do curl -s https://dl.google.com/android/maven2/androidx/media3/$a/maven-metadata.xml | grep -o '<version>[^<]*</version>' | tr '\n' ' '; echo; done
           curl -s https://dl.google.com/android/maven2/androidx/compose/compose-bom/maven-metadata.xml | grep -o '<version>[^<]*</version>' | tail -5 | tr '\n' ' '; echo
           curl -s https://dl.google.com/android/maven2/com/android/tools/build/gradle/maven-metadata.xml | grep -o '<version>[^<]*</version>' | tail -8 | tr '\n' ' '; echo
-      - name: Javap
+      - name: Javap2
         run: |
           set +e
-          LATEST=$(curl -s https://dl.google.com/android/maven2/androidx/media3/media3-transformer/maven-metadata.xml | grep -o '<release>[^<]*' | sed 's/<release>//')
-          echo "LATEST=$LATEST"
-          for V in 1.5.1 $LATEST; do
-            mkdir -p j$V; cd j$V
-            for a in media3-transformer media3-effect media3-common media3-exoplayer; do
-              curl -sfLo $a.aar https://dl.google.com/android/maven2/androidx/media3/$a/$V/$a-$V.aar && unzip -qo $a.aar classes.jar && mv classes.jar $a.jar
-            done
-            CP=$(ls *.jar | tr '\n' ':')
-            echo "================= $V"
-            for c in androidx.media3.transformer.Composition\$Builder androidx.media3.transformer.EditedMediaItemSequence androidx.media3.transformer.EditedMediaItemSequence\$Builder androidx.media3.transformer.EditedMediaItem\$Builder androidx.media3.transformer.Effects androidx.media3.transformer.CompositionPlayer androidx.media3.transformer.CompositionPlayer\$Builder androidx.media3.common.VideoCompositorSettings androidx.media3.common.OverlaySettings androidx.media3.effect.StaticOverlaySettings androidx.media3.effect.StaticOverlaySettings\$Builder androidx.media3.effect.OverlaySettings androidx.media3.effect.OverlaySettings\$Builder androidx.media3.effect.BitmapOverlay androidx.media3.effect.GlEffect androidx.media3.effect.BaseGlShaderProgram androidx.media3.effect.GlShaderProgram androidx.media3.effect.DefaultVideoCompositor androidx.media3.common.audio.ChannelMixingAudioProcessor androidx.media3.common.audio.ChannelMixingMatrix androidx.media3.common.util.GlProgram androidx.media3.effect.AlphaScale androidx.media3.effect.ScaleAndRotateTransformation\$Builder; do
-              echo "--- $c"; javap -cp "$CP" "$c" 2>&1 | grep -v '^Compiled'
-            done
-            cd ..
+          curl -s https://dl.google.com/android/maven2/com/android/tools/build/gradle/maven-metadata.xml | grep -o '<version>[^<]*</version>' | grep -v -E 'alpha|beta|rc|dev' | tail -12 | tr '\n' ' '; echo
+          curl -s https://dl.google.com/android/maven2/androidx/core/core-ktx/maven-metadata.xml | grep -o '<version>[^<]*</version>' | grep -v -E 'alpha|beta|rc' | tail -3 | tr '\n' ' '; echo
+          curl -s https://dl.google.com/android/maven2/androidx/activity/activity-compose/maven-metadata.xml | grep -o '<version>[^<]*</version>' | grep -v -E 'alpha|beta|rc' | tail -3 | tr '\n' ' '; echo
+          curl -s https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-gradle-plugin/maven-metadata.xml | grep -o '<version>[^<]*</version>' | grep -v -E 'Beta|RC|dev|M' | tail -6 | tr '\n' ' '; echo
+          V=1.11.1; mkdir j; cd j
+          for a in media3-transformer media3-effect media3-common media3-exoplayer media3-ui; do
+            curl -sfLo $a.aar https://dl.google.com/android/maven2/androidx/media3/$a/$V/$a-$V.aar && unzip -qo $a.aar classes.jar && mv classes.jar $a.jar; unzip -p $a.aar META-INF/com/android/build/gradle/aar-metadata.properties; echo
+          done
+          curl -s https://dl.google.com/android/maven2/androidx/media3/media3-transformer/$V/media3-transformer-$V.pom | grep -A2 artifactId | head -60
+          CP=$(ls *.jar | tr '\n' ':')
+          for c in androidx.media3.effect.TextOverlay androidx.media3.effect.OverlayEffect androidx.media3.effect.Presentation androidx.media3.transformer.Transformer androidx.media3.transformer.Transformer\$Builder androidx.media3.transformer.Transformer\$Listener androidx.media3.common.MediaItem\$Builder androidx.media3.common.SpeedParameters androidx.media3.transformer.DefaultEncoderFactory\$Builder androidx.media3.transformer.VideoEncoderSettings\$Builder androidx.media3.transformer.AudioEncoderSettings\$Builder androidx.media3.transformer.ExportException androidx.media3.transformer.ProgressHolder androidx.media3.effect.RgbMatrix androidx.media3.effect.Crop androidx.media3.effect.Brightness androidx.media3.effect.HslAdjustment\$Builder androidx.media3.effect.RgbFilter androidx.media3.effect.RgbAdjustment\$Builder androidx.media3.common.audio.SpeedProvider androidx.media3.effect.SingleFrameGlShaderProgram androidx.media3.common.util.GlUtil androidx.media3.common.SimpleBasePlayer androidx.media3.ui.PlayerView; do
+            echo "--- $c"; javap -cp "$CP" "$c" 2>&1 | grep -v -E '^Compiled|access\$'
           done
