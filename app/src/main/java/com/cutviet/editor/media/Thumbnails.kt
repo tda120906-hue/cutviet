@@ -48,7 +48,7 @@ object Thumbnails {
         return scale(frame, sizePx)
     }
 
-    private fun loadImage(context: Context, uri: Uri, sizePx: Int): Bitmap? {
+    internal fun loadImage(context: Context, uri: Uri, sizePx: Int): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
         var sample = 1
@@ -72,7 +72,7 @@ object Thumbnails {
         return scale(rotated, sizePx)
     }
 
-    private fun scale(b: Bitmap, sizePx: Int): Bitmap {
+    internal fun scale(b: Bitmap, sizePx: Int): Bitmap {
         val l = max(b.width, b.height)
         if (l <= sizePx) return b
         val k = sizePx.toFloat() / l

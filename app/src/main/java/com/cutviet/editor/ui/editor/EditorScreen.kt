@@ -188,6 +188,7 @@ private fun EditorContent(vm: EditorViewModel, onBack: () -> Unit) {
                 update = { if (it.player !== player) it.player = player },
                 modifier = Modifier.fillMaxSize(),
             )
+            OverlayPreview(vm, Modifier.fillMaxSize())
             OverlayGizmo(vm, Modifier.fillMaxSize())
             if (vm.project.clips.isEmpty()) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {

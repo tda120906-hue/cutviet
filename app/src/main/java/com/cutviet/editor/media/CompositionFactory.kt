@@ -58,6 +58,7 @@ object CompositionFactory {
         val width: Int,
         val height: Int,
         val includeAudioTracks: Boolean = true,
+        /** Overlay pictures as video layers (their sound follows [includeAudioTracks]). */
         val includeOverlays: Boolean = true,
         val includeSpeed: Boolean = true,
         val hdrMode: Int = Composition.HDR_MODE_KEEP_HDR,
@@ -77,7 +78,8 @@ object CompositionFactory {
         // Sequence index -> overlay drawn by that sequence (for the compositor settings).
         val overlayByIndex = HashMap<Int, Overlay>()
 
-        val overlays = if (o.includeOverlays) project.overlays.filter { it.startMs < total && it.durationMs > 0 } else emptyList()
+        val placed = project.overlays.filter { it.startMs < total && it.durationMs > 0 }
+        val overlays = if (o.includeOverlays) placed else emptyList()
         if (overlays.isEmpty()) {
             videoSequences += main
         } else {
@@ -98,14 +100,15 @@ object CompositionFactory {
                 if (after > 0) b.addItem(fillerItem(transparent, after, 30))
                 overlayByIndex[videoSequences.size] = ov
                 videoSequences += b.build()
-                if (ov.hasAudio && !ov.isImage && ov.volume > 0f && o.includeAudioTracks) {
-                    audioSequences += overlayAudioSequence(ov, visibleMs)
-                }
             }
             videoSequences += main
         }
 
         if (o.includeAudioTracks) {
+            // Overlay sound plays even when the overlay pictures are drawn elsewhere (editor preview).
+            placed.filter { it.hasAudio && !it.isImage && it.volume > 0f }.forEach { ov ->
+                audioSequences += overlayAudioSequence(ov, minOf(ov.durationMs, total - ov.startMs))
+            }
             project.audios.forEach { a -> audioTrackSequence(a, total)?.let { audioSequences += it } }
         }
 
@@ -171,9 +174,8 @@ object CompositionFactory {
         }
         val video = mutableListOf<Effect>()
         ov.chroma?.let { video += ChromaKeyEffect(it.color, it.strength, it.softness) }
-        // Masks are drawn on the picture as the user sees it, so mirror their position when flipped.
         if (ov.mask != null || ov.eraseMask != null) {
-            video += MaskEffect(ov.mask?.let { m -> if (ov.flipH) m.copy(cx = 1f - m.cx, angle = -m.angle) else m }, ov.eraseMask?.takeIf { File(it).exists() })
+            video += MaskEffect(OverlayPixels.unflippedMask(ov), ov.eraseMask?.takeIf { File(it).exists() })
         }
         if (ov.flipH) video += ScaleAndRotateTransformation.Builder().setScale(-1f, 1f).build()
         // Size the layer to "fit the frame"; the compositor then applies the user's scale.

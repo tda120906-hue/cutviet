@@ -16,6 +16,7 @@ Xuất video giữ nguyên độ phân giải, khung hình/giây và bitrate tư
   kéo dãn hai mép, giữ-kéo để di chuyển, nhân bản, xóa
 - Lớp phủ xếp tầng: mỗi lớp phủ một tầng riêng trên dòng thời gian (có ảnh khung hình, tên tệp, thời lượng), tầng trên cùng là lớp nằm trên;
   giữ rồi kéo để dời thời điểm hoặc kéo lên/xuống để đổi tầng, kéo hai mép để kéo dài/thu ngắn, bám vào mép đoạn và đầu phát
+- Lớp phủ hiện ngay trên khung xem trước khi chỉnh sửa (đúng vị trí, kích thước, tẩy nền, mặt nạ, vùng đã tẩy), cập nhật tức thì khi kéo/chỉnh; video lớp phủ chạy cùng video chính khi bấm phát
 - Trên khung xem trước: chạm để chọn lớp phủ, kéo để di chuyển, kéo góc dưới bên phải để đổi kích thước
 - Tẩy nền lớp phủ (phông xanh lá/xanh dương, nền đen/trắng hoặc màu tùy chọn) với cường độ và làm mềm viền
 - Tẩy một phần lớp phủ bằng cọ vẽ tay (tẩy/khôi phục, cỡ cọ, độ mềm, phóng to để tẩy chi tiết)

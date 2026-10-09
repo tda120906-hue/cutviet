@@ -192,6 +192,16 @@ object ProjectOps {
         }
     }
 
+    /**
+     * Time in the overlay's source file shown at timeline time [timelineMs] (its first frame before
+     * it starts, its last frame after it ends).
+     */
+    fun overlaySourceTimeMs(o: Overlay, timelineMs: Long): Long {
+        if (o.isImage) return 0
+        val offset = (timelineMs - o.startMs).coerceIn(0, o.durationMs)
+        return (o.trimStartMs + (offset * o.speed).toLong()).coerceIn(o.trimStartMs, max(o.trimStartMs, o.trimEndMs - 1))
+    }
+
     /** Puts items into rows so that items in the same row never overlap in time. */
     fun <T> lanes(items: List<T>, start: (T) -> Long, end: (T) -> Long): List<List<T>> {
         val rows = mutableListOf<MutableList<T>>()

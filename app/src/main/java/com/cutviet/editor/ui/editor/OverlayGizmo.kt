@@ -20,30 +20,7 @@ import com.cutviet.editor.model.Overlay
 import com.cutviet.editor.model.ProjectOps
 import com.cutviet.editor.ui.theme.Accent
 import kotlin.math.abs
-import kotlin.math.cos
 import kotlin.math.max
-import kotlin.math.min
-import kotlin.math.sin
-
-/** Where an overlay is drawn on the preview, in pixels of the preview view. */
-private class Placement(val center: Offset, val width: Float, val height: Float, val rotationDeg: Float) {
-    private val rad = Math.toRadians(rotationDeg.toDouble())
-
-    /** Rotates [v] by the overlay's rotation (clockwise on screen). */
-    private fun rotateBy(v: Offset, sign: Float): Offset {
-        val c = cos(rad).toFloat()
-        val s = sin(rad).toFloat() * sign
-        return Offset(v.x * c - v.y * s, v.x * s + v.y * c)
-    }
-
-    fun contains(p: Offset): Boolean {
-        val local = rotateBy(p - center, -1f)
-        return abs(local.x) <= width / 2 && abs(local.y) <= height / 2
-    }
-
-    /** The resize handle, at the bottom-right corner. */
-    val corner: Offset get() = center + rotateBy(Offset(width / 2, height / 2), 1f)
-}
 
 /**
  * Lets the user handle overlays directly on the preview: tap one to select it, drag it to move it,
@@ -57,22 +34,13 @@ fun OverlayGizmo(vm: EditorViewModel, modifier: Modifier = Modifier) {
     BoxWithConstraints(modifier) {
         val boxW = constraints.maxWidth.toFloat()
         val boxH = constraints.maxHeight.toFloat()
-        // The player shows the whole video frame fitted inside the view.
-        val s = min(boxW / canvasW, boxH / canvasH)
-        val frameW = canvasW * s
-        val frameH = canvasH * s
-        val left = (boxW - frameW) / 2
-        val top = (boxH - frameH) / 2
+        val frame = PreviewFrame(boxW, boxH, canvasW, canvasH)
+        val frameW = frame.width
+        val frameH = frame.height
+        val left = frame.left
+        val top = frame.top
 
-        fun placementOf(o: Overlay): Placement {
-            val fit = min(canvasW.toFloat() / o.width.coerceAtLeast(1), canvasH.toFloat() / o.height.coerceAtLeast(1))
-            return Placement(
-                center = Offset(left + o.x * frameW, top + o.y * frameH),
-                width = o.width * fit * o.scale * s,
-                height = o.height * fit * o.scale * s,
-                rotationDeg = o.rotation,
-            )
-        }
+        fun placementOf(o: Overlay): Placement = frame.placement(o)
 
         fun visibleAt(o: Overlay, t: Long) = t >= o.startMs && t < o.endMs && o.startMs < vm.project.durationMs
 

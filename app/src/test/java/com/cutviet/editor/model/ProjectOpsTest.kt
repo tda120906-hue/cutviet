@@ -139,4 +139,16 @@ class ProjectOpsTest {
         assertEquals(5_000, ProjectOps.snap(5_080, listOf(0, 5_000, 9_000), 100))
         assertEquals(5_300, ProjectOps.snap(5_300, listOf(0, 5_000, 9_000), 100))
     }
+
+    @Test
+    fun overlaySourceTimeFollowsTrimAndSpeed() {
+        val o = Overlay(
+            uri = "v", mime = "video/mp4", isImage = false, sourceDurationMs = 10_000, width = 100, height = 100,
+            trimStartMs = 2_000, trimEndMs = 8_000, startMs = 1_000, speed = 2f,
+        )
+        assertEquals(2_000, ProjectOps.overlaySourceTimeMs(o, 0))
+        assertEquals(3_000, ProjectOps.overlaySourceTimeMs(o, 1_500))
+        assertEquals(7_999, ProjectOps.overlaySourceTimeMs(o, 10_000))
+        assertEquals(0, ProjectOps.overlaySourceTimeMs(o.copy(isImage = true), 1_500))
+    }
 }
