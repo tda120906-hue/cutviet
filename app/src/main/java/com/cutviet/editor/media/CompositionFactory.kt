@@ -165,7 +165,7 @@ object CompositionFactory {
             builder.setClippingConfiguration(
                 MediaItem.ClippingConfiguration.Builder()
                     .setStartPositionMs(ov.trimStartMs)
-                    .setEndPositionMs(ov.trimStartMs + (visibleMs * ov.speed).toLong())
+                    .setEndPositionMs(minOf(ov.trimEndMs, ov.trimStartMs + (visibleMs * ov.speed).toLong()))
                     .build(),
             )
         }
@@ -180,6 +180,7 @@ object CompositionFactory {
         val edited = EditedMediaItem.Builder(builder.build())
             .setRemoveAudio(true)
             .setEffects(Effects(emptyList(), video))
+        if (!ov.isImage) edited.setSourceDuration(ov.sourceDurationMs)
         if (ov.isImage) edited.setFrameRate(30)
         else if (ov.speed != 1f && o.includeSpeed) edited.setSpeed(ConstantSpeedProvider(ov.speed))
         return edited.build()
@@ -190,12 +191,13 @@ object CompositionFactory {
             .setClippingConfiguration(
                 MediaItem.ClippingConfiguration.Builder()
                     .setStartPositionMs(ov.trimStartMs)
-                    .setEndPositionMs(ov.trimStartMs + (visibleMs * ov.speed).toLong())
+                    .setEndPositionMs(minOf(ov.trimEndMs, ov.trimStartMs + (visibleMs * ov.speed).toLong()))
                     .build(),
             ).build()
         val edited = EditedMediaItem.Builder(item)
             .setRemoveVideo(true)
             .setEffects(Effects(listOfNotNull(volumeProcessor(ov.volume)), emptyList()))
+            .setSourceDuration(ov.sourceDurationMs)
         if (ov.speed != 1f) edited.setSpeed(ConstantSpeedProvider(ov.speed))
         val b = EditedMediaItemSequence.Builder(AUDIO_ONLY)
         if (ov.startMs > 0) b.addGap(ov.startMs * 1000)
@@ -216,12 +218,13 @@ object CompositionFactory {
                 .setClippingConfiguration(
                     MediaItem.ClippingConfiguration.Builder()
                         .setStartPositionMs(a.sourceStartMs)
-                        .setEndPositionMs(a.sourceStartMs + (passMs * a.speed).toLong())
+                        .setEndPositionMs(minOf(a.sourceEndMs, a.sourceStartMs + (passMs * a.speed).toLong()))
                         .build(),
                 ).build()
             val edited = EditedMediaItem.Builder(item)
                 .setRemoveVideo(true)
                 .setEffects(Effects(listOfNotNull(volumeProcessor(a.volume)), emptyList()))
+                .setSourceDuration(a.sourceDurationMs)
             if (a.speed != 1f) edited.setSpeed(ConstantSpeedProvider(a.speed))
             b.addItem(edited.build())
             remaining -= passMs
@@ -232,6 +235,13 @@ object CompositionFactory {
     }
 
     private fun even(v: Int) = max(2, v - v % 2)
+
+    /**
+     * CompositionPlayer needs the full length of every video/audio file up front to lay out the
+     * timeline (images get it from their display duration).
+     */
+    private fun EditedMediaItem.Builder.setSourceDuration(ms: Long): EditedMediaItem.Builder =
+        if (ms > 0) setDurationUs(ms * 1000) else this
 
     private fun clipItem(c: Clip, o: Options): EditedMediaItem {
         val builder = MediaItem.Builder().setUri(c.uri)
@@ -274,6 +284,7 @@ object CompositionFactory {
 
         val edited = EditedMediaItem.Builder(mediaItem)
             .setEffects(Effects(audio, video))
+        if (!c.isImage) edited.setSourceDuration(c.sourceDurationMs)
         if (c.isImage) edited.setFrameRate(30)
         else if (c.speed != 1f && o.includeSpeed) edited.setSpeed(ConstantSpeedProvider(c.speed))
         return edited.build()

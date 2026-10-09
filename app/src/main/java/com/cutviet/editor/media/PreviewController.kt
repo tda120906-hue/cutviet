@@ -7,6 +7,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.VideoCompositorSettings
+import androidx.media3.effect.MultipleInputVideoGraph
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.transformer.CompositionPlayer
 import com.cutviet.editor.model.Project
@@ -26,6 +28,8 @@ class PreviewController(private val context: Context) {
 
     private var project: Project? = null
     private var composition: CompositionPlayer? = null
+    /** Whether [composition] was built to blend several video layers (needed for overlays). */
+    private var compositionLayered = false
     private var exo: ExoPlayer? = null
     private var withAudio = true
     private var withOverlays = true
@@ -69,11 +73,6 @@ class PreviewController(private val context: Context) {
             return
         }
         try {
-            val cp = composition ?: CompositionPlayer.Builder(context).build().also {
-                it.addListener(listener)
-                composition = it
-                player.value = it
-            }
             val size = ProjectOps.fitLongSide(ProjectOps.canvasSize(p), 1280)
             val comp = CompositionFactory.build(
                 context,
@@ -83,6 +82,18 @@ class PreviewController(private val context: Context) {
                     includeAudioTracks = withAudio, includeOverlays = withOverlays, includeSpeed = withSpeed,
                 ),
             )
+            // Overlays are separate video layers; the player can only blend them with a multi-input graph,
+            // which is chosen when the player is created.
+            val layered = comp.videoCompositorSettings !== VideoCompositorSettings.DEFAULT
+            if (composition != null && compositionLayered != layered) releaseComposition()
+            val cp = composition ?: CompositionPlayer.Builder(context)
+                .apply { if (layered) setVideoGraphFactory(MultipleInputVideoGraph.Factory()) }
+                .build().also {
+                    it.addListener(listener)
+                    composition = it
+                    compositionLayered = layered
+                    player.value = it
+                }
             cp.setComposition(comp)
             cp.prepare()
             cp.seekTo(position.coerceIn(0, p.durationMs))
