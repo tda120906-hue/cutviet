@@ -37,7 +37,11 @@ import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.AutoFixHigh
-import androidx.compose.material.icons.filled.CallSplit
+import androidx.compose.material.icons.automirrored.filled.CallSplit
+import androidx.compose.material.icons.filled.Brush
+import androidx.compose.material.icons.filled.FlipToBack
+import androidx.compose.material.icons.filled.FlipToFront
+import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.RecordVoiceOver
@@ -241,6 +245,9 @@ private fun EditorContent(vm: EditorViewModel, onBack: () -> Unit) {
         })
     }
     ExportProgress(vm)
+    vm.eraserOverlayId?.let { id ->
+        vm.project.overlays.firstOrNull { it.id == id }?.let { EraserDialog(vm, it) }
+    }
 }
 
 @Composable
@@ -285,7 +292,12 @@ private fun Toolbar(vm: EditorViewModel, onAddMedia: () -> Unit, onAddMusic: () 
     val tools = when {
         vm.selectedOverlay != null -> listOf(
             Tool("Chỉnh lớp phủ", Icons.Filled.Tune) { vm.openPanel(Panel.OVERLAY) },
+            Tool("Tẩy một phần", Icons.Filled.Brush) { vm.openEraser() },
+            Tool("Mặt nạ", Icons.Filled.Category) { vm.openPanel(Panel.OVERLAY_MASK) },
             Tool("Tẩy nền", Icons.Filled.AutoFixHigh) { vm.openPanel(Panel.OVERLAY_KEY) },
+            Tool("Lên trên", Icons.Filled.FlipToFront) { vm.restackSelectedOverlay(1) },
+            Tool("Xuống dưới", Icons.Filled.FlipToBack) { vm.restackSelectedOverlay(-1) },
+            Tool("Thêm lớp phủ", Icons.Filled.Layers) { onAddOverlay() },
             Tool("Đến đầu phát", Icons.Filled.VerticalAlignCenter) { vm.moveOverlayToPlayhead() },
             Tool("Nhân bản", Icons.Filled.ContentCopy) { vm.duplicateSelectedOverlay() },
             Tool("Xóa lớp phủ", Icons.Filled.Delete, danger = true) { vm.deleteSelectedOverlay() },
@@ -298,12 +310,13 @@ private fun Toolbar(vm: EditorViewModel, onAddMedia: () -> Unit, onAddMusic: () 
         }
         clip != null -> buildList {
             add(Tool("Tách", Icons.Filled.VerticalSplit) { vm.splitAtPlayhead() })
+            add(Tool("Lớp phủ", Icons.Filled.Layers) { onAddOverlay() })
             if (clip.isImage) add(Tool("Thời lượng", Icons.Filled.Timer) { vm.openPanel(Panel.DURATION) })
             else {
                 add(Tool("Cắt", Icons.Filled.ContentCut) { vm.openPanel(Panel.TRIM) })
                 add(Tool("Tốc độ", Icons.Filled.Speed) { vm.openPanel(Panel.SPEED) })
                 add(Tool("Âm lượng", Icons.AutoMirrored.Filled.VolumeUp) { vm.openPanel(Panel.VOLUME) })
-                add(Tool("Tách âm thanh", Icons.Filled.CallSplit) { vm.extractAudioFromSelected() })
+                add(Tool("Tách âm thanh", Icons.AutoMirrored.Filled.CallSplit) { vm.extractAudioFromSelected() })
             }
             add(Tool("Bộ lọc", Icons.Filled.AutoAwesome) { vm.openPanel(Panel.FILTER) })
             add(Tool("Điều chỉnh", Icons.Filled.Tune) { vm.openPanel(Panel.ADJUST) })

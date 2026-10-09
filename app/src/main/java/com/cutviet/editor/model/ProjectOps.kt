@@ -78,6 +78,19 @@ object ProjectOps {
         return updateClip(p, index) { it.copy(volume = 0f) }.copy(audios = p.audios + track)
     }
 
+    /**
+     * Moves an overlay up (+1) or down (-1) in the stack. Later overlays are drawn on top. Returns
+     * [p] itself when it is already at the top/bottom.
+     */
+    fun restackOverlay(p: Project, id: String, delta: Int): Project {
+        val i = p.overlays.indexOfFirst { it.id == id }
+        val to = i + delta
+        if (i < 0 || to !in p.overlays.indices) return p
+        val list = p.overlays.toMutableList()
+        list.add(to, list.removeAt(i))
+        return p.copy(overlays = list)
+    }
+
     fun updateOverlay(p: Project, id: String, f: (Overlay) -> Overlay): Project =
         p.copy(overlays = p.overlays.map { if (it.id == id) f(it) else it })
 
@@ -132,6 +145,25 @@ object ProjectOps {
     fun stretchAudioEnd(a: AudioTrack, deltaMs: Long): AudioTrack {
         val e = (a.sourceEndMs + (deltaMs * a.speed).toLong()).coerceIn(a.sourceStartMs + MIN_CLIP_MS, a.sourceDurationMs)
         return a.copy(sourceEndMs = e)
+    }
+
+    /**
+     * Rows for overlays that follow the drawing order: an overlay is always on a higher row than
+     * every overlay it covers, so the timeline shows which layer is on top. Row 0 is the bottom.
+     */
+    fun overlayRows(overlays: List<Overlay>): List<List<Overlay>> {
+        val rowOf = IntArray(overlays.size)
+        for (i in overlays.indices) {
+            val o = overlays[i]
+            var row = 0
+            for (j in 0 until i) {
+                val b = overlays[j]
+                if (b.startMs < o.endMs && o.startMs < b.endMs) row = max(row, rowOf[j] + 1)
+            }
+            rowOf[i] = row
+        }
+        val count = (rowOf.maxOrNull() ?: -1) + 1
+        return (0 until count).map { r -> overlays.filterIndexed { i, _ -> rowOf[i] == r } }
     }
 
     /** Puts items into rows so that items in the same row never overlap in time. */

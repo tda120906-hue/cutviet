@@ -111,4 +111,26 @@ class ProjectOpsTest {
         for (row in rows) row.zipWithNext().forEach { (a, b) -> assertTrue(a.second <= b.first) }
         assertEquals(items.size, rows.sumOf { it.size })
     }
+
+    @Test
+    fun restackMovesOverlayWithinBounds() {
+        val a = overlay(1_000); val b = overlay(2_000); val c = overlay(3_000)
+        val p = Project(name = "t", overlays = listOf(a, b, c))
+        assertEquals(listOf(b, a, c), ProjectOps.restackOverlay(p, a.id, 1).overlays)
+        assertEquals(listOf(a, c, b), ProjectOps.restackOverlay(p, c.id, -1).overlays)
+        assertSame(p, ProjectOps.restackOverlay(p, c.id, 1))
+        assertSame(p, ProjectOps.restackOverlay(p, a.id, -1))
+    }
+
+    @Test
+    fun overlayRowsFollowStackingOrder() {
+        val bottom = overlay(5_000, startMs = 0)
+        val later = overlay(2_000, startMs = 6_000)
+        val top = overlay(3_000, startMs = 1_000)
+        val rows = ProjectOps.overlayRows(listOf(bottom, later, top))
+        assertEquals(listOf(listOf(bottom, later), listOf(top)), rows)
+        // Moving the top layer down puts it on the bottom row.
+        val swapped = ProjectOps.overlayRows(listOf(top, bottom, later))
+        assertEquals(listOf(listOf(top, later), listOf(bottom)), swapped)
+    }
 }

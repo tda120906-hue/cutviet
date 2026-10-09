@@ -78,6 +78,8 @@ import com.cutviet.editor.media.Thumbnails
 import com.cutviet.editor.media.VoiceEngine
 import com.cutviet.editor.model.AudioKind
 import com.cutviet.editor.model.VoiceSpec
+import com.cutviet.editor.model.MaskShape
+import com.cutviet.editor.model.ShapeMask
 import com.cutviet.editor.model.Adjustments
 import com.cutviet.editor.model.AspectRatio
 import com.cutviet.editor.model.CropSpec
@@ -123,6 +125,7 @@ fun PanelHost(vm: EditorViewModel, panel: Panel, modifier: Modifier = Modifier.h
                 Panel.AUDIO -> AudioPanel(vm)
                 Panel.OVERLAY -> OverlayPanel(vm)
                 Panel.OVERLAY_KEY -> OverlayKeyPanel(vm)
+                Panel.OVERLAY_MASK -> OverlayMaskPanel(vm)
                 Panel.VOICE -> VoicePanel(vm)
                 Panel.CANVAS -> CanvasPanel(vm)
                 Panel.DURATION -> DurationPanel(vm)
@@ -657,7 +660,15 @@ private fun OverlayPanel(vm: EditorViewModel) {
         )
     }
     Row(Modifier.horizontalScroll(rememberScrollState()).padding(top = 4.dp)) {
+        OutlinedButton(onClick = { vm.openEraser() }) { Text("Tẩy một phần") }
+        Spacer(Modifier.width(6.dp))
+        OutlinedButton(onClick = { vm.switchPanel(Panel.OVERLAY_MASK) }) { Text("Mặt nạ") }
+        Spacer(Modifier.width(6.dp))
         OutlinedButton(onClick = { vm.switchPanel(Panel.OVERLAY_KEY) }) { Text("Tẩy nền") }
+        Spacer(Modifier.width(6.dp))
+        OutlinedButton(onClick = { vm.restackSelectedOverlay(1) }) { Text("Lên trên") }
+        Spacer(Modifier.width(6.dp))
+        OutlinedButton(onClick = { vm.restackSelectedOverlay(-1) }) { Text("Xuống dưới") }
         Spacer(Modifier.width(6.dp))
         OutlinedButton(onClick = { vm.moveOverlayToPlayhead() }) { Text("Đặt tại đầu phát") }
         Spacer(Modifier.width(6.dp))
@@ -716,6 +727,45 @@ private fun OverlayKeyPanel(vm: EditorViewModel) {
     }
     LabeledSlider("Cường độ tẩy", k.strength, 0f..1f, pct(k.strength)) { v -> set { it?.copy(strength = v) } }
     LabeledSlider("Làm mềm viền", k.softness, 0f..1f, pct(k.softness)) { v -> set { it?.copy(softness = v) } }
+}
+
+@Composable
+private fun OverlayMaskPanel(vm: EditorViewModel) {
+    val o = vm.selectedOverlay ?: return
+    val m = o.mask
+    fun set(f: (ShapeMask) -> ShapeMask) = vm.updateSelectedOverlay { it.copy(mask = it.mask?.let(f)) }
+    Text(
+        "Chỉ giữ lại phần lớp phủ bên trong hình (hoặc bên ngoài nếu bật Đảo ngược). " +
+            "Muốn xóa một vùng tùy ý, dùng \"Tẩy một phần\".",
+        color = TextDim, fontSize = 12.sp,
+    )
+    Row(Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 4.dp)) {
+        Chip("Không", m == null) { vm.updateSelectedOverlay { it.copy(mask = null) } }
+        MaskShape.entries.forEach { shape ->
+            Chip(shape.label, m?.shape == shape) {
+                vm.updateSelectedOverlay { it.copy(mask = (it.mask ?: ShapeMask()).copy(shape = shape)) }
+            }
+        }
+    }
+    if (m == null) return
+    if (m.shape != MaskShape.LINEAR) {
+        LabeledSlider("Kích thước", m.size, 0.05f..1.5f, "${pct(m.size)}%") { v -> set { it.copy(size = v) } }
+    }
+    LabeledSlider("Làm mềm viền", m.feather, 0f..1f, pct(m.feather)) { v -> set { it.copy(feather = v) } }
+    LabeledSlider("Vị trí ngang", m.cx, 0f..1f, pct(m.cx)) { v -> set { it.copy(cx = v) } }
+    LabeledSlider("Vị trí dọc", m.cy, 0f..1f, pct(m.cy)) { v -> set { it.copy(cy = v) } }
+    LabeledSlider("Xoay", m.angle, -180f..180f, "${m.angle.roundToInt()}°") { v -> set { it.copy(angle = v.roundToInt().toFloat()) } }
+    if (m.shape == MaskShape.RECT) {
+        LabeledSlider("Bo góc", m.roundness, 0f..1f, pct(m.roundness)) { v -> set { it.copy(roundness = v) } }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("Đảo ngược (xóa phần bên trong)", color = Color.White, modifier = Modifier.weight(1f))
+        Switch(
+            checked = m.invert,
+            onCheckedChange = { inv -> set { it.copy(invert = inv) } },
+            colors = SwitchDefaults.colors(checkedTrackColor = Accent),
+        )
+    }
 }
 
 // ---------- voice-over (text to speech) ----------

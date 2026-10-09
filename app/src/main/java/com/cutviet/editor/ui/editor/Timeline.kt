@@ -143,7 +143,7 @@ fun Timeline(vm: EditorViewModel, onAddMusic: () -> Unit, onAddMedia: () -> Unit
             val totalWidth = with(density) { (project.durationMs * pxPerMs).toDp() }
 
             // Overlay lanes (above the main track, like CapCut).
-            val overlayLanes = ProjectOps.lanes(project.overlays, { it.startMs }, { it.endMs })
+            val overlayLanes = ProjectOps.overlayRows(project.overlays)
             overlayLanes.asReversed().forEach { lane ->
                 LaneRow(half, totalWidth) {
                     lane.forEach { ov ->

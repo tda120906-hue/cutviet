@@ -170,8 +170,12 @@ object CompositionFactory {
             )
         }
         val video = mutableListOf<Effect>()
-        if (ov.flipH) video += ScaleAndRotateTransformation.Builder().setScale(-1f, 1f).build()
         ov.chroma?.let { video += ChromaKeyEffect(it.color, it.strength, it.softness) }
+        // Masks are drawn on the picture as the user sees it, so mirror their position when flipped.
+        if (ov.mask != null || ov.eraseMask != null) {
+            video += MaskEffect(ov.mask?.let { m -> if (ov.flipH) m.copy(cx = 1f - m.cx, angle = -m.angle) else m }, ov.eraseMask?.takeIf { File(it).exists() })
+        }
+        if (ov.flipH) video += ScaleAndRotateTransformation.Builder().setScale(-1f, 1f).build()
         // Size the layer to "fit the frame"; the compositor then applies the user's scale.
         val k = minOf(o.width.toFloat() / ov.width.coerceAtLeast(1), o.height.toFloat() / ov.height.coerceAtLeast(1))
         video += Presentation.createForWidthAndHeight(

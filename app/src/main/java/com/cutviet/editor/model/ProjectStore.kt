@@ -25,6 +25,31 @@ class ProjectStore(context: Context) {
 
     fun delete(id: String) {
         File(dir, "$id.json").delete()
+        File(dir, "$id.history").delete()
+    }
+
+    /** Saves the undo/redo steps next to the draft so they survive closing the project. */
+    fun saveHistory(id: String, undo: List<Project>, redo: List<Project>) {
+        val json = JSONObject().apply {
+            put("undo", JSONArray().apply { undo.forEach { put(toJson(it)) } })
+            put("redo", JSONArray().apply { redo.forEach { put(toJson(it)) } })
+        }
+        val tmp = File(dir, "$id.history.tmp")
+        tmp.writeText(json.toString())
+        tmp.renameTo(File(dir, "$id.history"))
+    }
+
+    fun loadHistory(id: String): Pair<List<Project>, List<Project>> {
+        val f = File(dir, "$id.history")
+        if (!f.exists()) return emptyList<Project>() to emptyList()
+        return runCatching {
+            val o = JSONObject(f.readText())
+            fun list(key: String): List<Project> {
+                val a = o.optJSONArray(key) ?: return emptyList()
+                return (0 until a.length()).mapNotNull { i -> runCatching { fromJson(a.getJSONObject(i)) }.getOrNull() }
+            }
+            list("undo") to list("redo")
+        }.getOrDefault(emptyList<Project>() to emptyList())
     }
 
     companion object {
@@ -51,6 +76,14 @@ class ProjectStore(context: Context) {
                     put("color", k.color); put("strength", k.strength.toDouble()); put("softness", k.softness.toDouble())
                 })
             }
+            o.mask?.let { m ->
+                put("mask", JSONObject().apply {
+                    put("shape", m.shape.name); put("cx", m.cx.toDouble()); put("cy", m.cy.toDouble())
+                    put("size", m.size.toDouble()); put("feather", m.feather.toDouble()); put("angle", m.angle.toDouble())
+                    put("roundness", m.roundness.toDouble()); put("invert", m.invert)
+                })
+            }
+            o.eraseMask?.let { put("eraseMask", it) }
         }
 
         private fun audioJson(a: AudioTrack) = JSONObject().apply {
@@ -128,6 +161,16 @@ class ProjectStore(context: Context) {
                     softness = k.optDouble("softness", 0.15).toFloat(),
                 )
             },
+            mask = o.optJSONObject("mask")?.let { m ->
+                ShapeMask(
+                    shape = runCatching { MaskShape.valueOf(m.getString("shape")) }.getOrDefault(MaskShape.CIRCLE),
+                    cx = m.optDouble("cx", 0.5).toFloat(), cy = m.optDouble("cy", 0.5).toFloat(),
+                    size = m.optDouble("size", 0.7).toFloat(), feather = m.optDouble("feather", 0.1).toFloat(),
+                    angle = m.optDouble("angle", 0.0).toFloat(), roundness = m.optDouble("roundness", 0.2).toFloat(),
+                    invert = m.optBoolean("invert"),
+                )
+            },
+            eraseMask = o.optString("eraseMask").ifEmpty { null },
         )
 
         private fun audioFrom(o: JSONObject): AudioTrack = AudioTrack(

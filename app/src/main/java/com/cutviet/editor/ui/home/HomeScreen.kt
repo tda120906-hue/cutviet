@@ -142,7 +142,13 @@ fun HomeScreen(
                         fontSize = 28.sp, fontWeight = FontWeight.Black, color = Color.White,
                         modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
                     )
-                    Text("Chỉnh sửa video, xuất chất lượng gốc", color = TextDim, fontSize = 14.sp)
+                    val version = remember {
+                        runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull()
+                    }
+                    Text(
+                        "Chỉnh sửa video, xuất chất lượng gốc" + (version?.let { " · bản $it" } ?: ""),
+                        color = TextDim, fontSize = 14.sp,
+                    )
                     Spacer(Modifier.height(16.dp))
                     NewProjectCard {
                         picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))

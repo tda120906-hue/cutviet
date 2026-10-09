@@ -156,6 +156,33 @@ data class ChromaKey(
     val softness: Float = 0.15f,
 )
 
+/** Shape used to cut out part of an overlay ("Mặt nạ"). */
+enum class MaskShape(val label: String) {
+    CIRCLE("Tròn"),
+    RECT("Chữ nhật"),
+    HEART("Trái tim"),
+    STAR("Ngôi sao"),
+    LINEAR("Đường thẳng"),
+    MIRROR("Dải gương"),
+}
+
+/** Keeps only the part of an overlay inside a shape (or outside it when [invert]). */
+data class ShapeMask(
+    val shape: MaskShape = MaskShape.CIRCLE,
+    /** Centre of the shape, 0..1 from the top-left of the overlay. */
+    val cx: Float = 0.5f,
+    val cy: Float = 0.5f,
+    /** 0..1, 1 = as large as the overlay's shorter side (rectangle: the whole overlay). */
+    val size: Float = 0.7f,
+    /** 0..1, width of the soft edge. */
+    val feather: Float = 0.1f,
+    /** Clockwise degrees. */
+    val angle: Float = 0f,
+    /** 0..1, corner rounding of the rectangle. */
+    val roundness: Float = 0.2f,
+    val invert: Boolean = false,
+)
+
 /** A picture-in-picture layer (video or image) drawn above the main track. */
 data class Overlay(
     val id: String = newId(),
@@ -181,6 +208,9 @@ data class Overlay(
     val opacity: Float = 1f,
     val flipH: Boolean = false,
     val chroma: ChromaKey? = null,
+    val mask: ShapeMask? = null,
+    /** PNG painted with the eraser: its alpha is how much of the overlay stays visible. */
+    val eraseMask: String? = null,
 ) {
     val trimmedMs: Long get() = trimEndMs - trimStartMs
     val durationMs: Long get() = if (isImage) trimmedMs else (trimmedMs / speed).toLong()

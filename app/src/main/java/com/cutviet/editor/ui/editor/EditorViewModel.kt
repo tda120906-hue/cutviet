@@ -1,7 +1,9 @@
 package com.cutviet.editor.ui.editor
 
 import android.app.Application
+import android.graphics.Bitmap
 import android.net.Uri
+import android.os.SystemClock
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -46,6 +48,7 @@ enum class Panel(val title: String) {
     AUDIO("Âm thanh"),
     OVERLAY("Lớp phủ"),
     OVERLAY_KEY("Tẩy nền lớp phủ"),
+    OVERLAY_MASK("Mặt nạ lớp phủ"),
     VOICE("Giọng đọc AI"),
     CANVAS("Tỉ lệ khung hình"),
     DURATION("Thời lượng ảnh"),
@@ -77,8 +80,16 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
     /** Timeline position under the playhead. */
     var playheadMs by mutableLongStateOf(0L)
 
+    /** Overlay being edited with the eraser (full-screen editor), if any. */
+    var eraserOverlayId by mutableStateOf<String?>(null)
+        private set
+
     private val undoStack = ArrayDeque<Project>()
     private val redoStack = ArrayDeque<Project>()
+    /** When the last live edit (slider, typing) was recorded; edits close together share one undo step. */
+    private var lastLiveEditAt = 0L
+    /** Set when a timeline drag starts; the undo step is recorded once the drag actually changes something. */
+    private var dragPending = false
     var historyVersion by mutableStateOf(0)
         private set
     val canUndo by derivedStateOf { historyVersion >= 0 && undoStack.isNotEmpty() }
@@ -91,21 +102,35 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
     val selectedAudio: AudioTrack? get() = selectedAudioId?.let { id -> project.audios.firstOrNull { it.id == id } }
 
     init {
+        val (undo, redo) = store.loadHistory(project.id)
+        undoStack.addAll(undo.takeLast(MAX_UNDO))
+        redoStack.addAll(redo.takeLast(MAX_UNDO))
+        historyVersion++
         preview.setProject(project, immediate = true)
     }
 
     // ---- state changes ----
 
-    private fun pushHistory() {
+    /**
+     * Records the current project as an undo step. Live edits ([coalesce]) that follow each other
+     * within a moment (one slider drag, a burst of typing) share a single step.
+     */
+    private fun pushHistory(coalesce: Boolean = false) {
+        val now = SystemClock.uptimeMillis()
+        if (coalesce && lastLiveEditAt != 0L && now - lastLiveEditAt < COALESCE_MS && undoStack.isNotEmpty()) {
+            lastLiveEditAt = now
+            return
+        }
+        lastLiveEditAt = if (coalesce) now else 0L
         undoStack.addLast(project)
-        if (undoStack.size > 60) undoStack.removeFirst()
+        while (undoStack.size > MAX_UNDO) undoStack.removeFirst()
         redoStack.clear()
         historyVersion++
     }
 
-    fun commit(p: Project, record: Boolean = true) {
+    fun commit(p: Project, record: Boolean = true, coalesce: Boolean = false) {
         if (p == project) return
-        if (record) pushHistory()
+        if (record) pushHistory(coalesce)
         project = p.copy(updatedAt = System.currentTimeMillis())
         selected?.let { if (it !in project.clips.indices) selected = null }
         preview.setProject(project)
@@ -115,6 +140,8 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
     fun undo() {
         val prev = undoStack.removeLastOrNull() ?: return
         redoStack.addLast(project)
+        while (redoStack.size > MAX_UNDO) redoStack.removeFirst()
+        lastLiveEditAt = 0L
         project = prev
         historyVersion++
         afterHistoryJump()
@@ -123,6 +150,8 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
     fun redo() {
         val next = redoStack.removeLastOrNull() ?: return
         undoStack.addLast(project)
+        while (undoStack.size > MAX_UNDO) undoStack.removeFirst()
+        lastLiveEditAt = 0L
         project = next
         historyVersion++
         afterHistoryJump()
@@ -139,37 +168,39 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
     private fun scheduleSave() {
         saveJob?.cancel()
         val snapshot = project
+        val undo = undoStack.toList()
+        val redo = redoStack.toList()
         saveJob = viewModelScope.launch {
             delay(600)
-            withContext(Dispatchers.IO) { runCatching { store.save(snapshot) } }
+            withContext(Dispatchers.IO) {
+                runCatching { store.save(snapshot) }
+                runCatching { store.saveHistory(snapshot.id, undo, redo) }
+            }
         }
     }
 
     fun saveNow() {
         val snapshot = project
         runCatching { store.save(snapshot) }
+        runCatching { store.saveHistory(snapshot.id, undoStack.toList(), redoStack.toList()) }
     }
 
     // ---- panels ----
 
-    /** Opens a tool panel; one undo step covers everything changed until it closes. */
+    /** Opens a tool panel. Each change made in it is its own undo step. */
     fun openPanel(p: Panel) {
         preview.pause()
-        pushHistory()
+        lastLiveEditAt = 0L
         panel = p
     }
 
-    /** Replaces the open panel with another one, keeping a single undo step for both. */
+    /** Replaces the open panel with another one. */
     fun switchPanel(p: Panel) {
         if (panel == null) openPanel(p) else panel = p
     }
 
     fun closePanel() {
-        // Drop the snapshot if the panel changed nothing.
-        if (undoStack.lastOrNull() == project) {
-            undoStack.removeLastOrNull()
-            historyVersion++
-        }
+        lastLiveEditAt = 0L
         panel = null
         editingTextId = null
     }
@@ -237,19 +268,19 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
         selected = to
     }
 
-    /** Live edit of the selected clip (history is handled by the open panel). */
+    /** Live edit of the selected clip (slider moves close together share one undo step). */
     fun updateSelected(f: (Clip) -> Clip) {
         val i = selected ?: return
-        commit(ProjectOps.updateClip(project, i, f), record = panel == null)
+        commit(ProjectOps.updateClip(project, i, f), coalesce = true)
     }
 
     fun applyToAll(f: (Clip) -> Clip) {
-        commit(ProjectOps.updateAll(project, f), record = panel == null)
+        commit(ProjectOps.updateAll(project, f))
         toast = "Đã áp dụng cho tất cả các đoạn"
     }
 
     fun updateProject(f: (Project) -> Project) {
-        commit(f(project), record = panel == null)
+        commit(f(project), coalesce = true)
     }
 
     fun addMedia(uris: List<Uri>) {
@@ -304,7 +335,7 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
 
     fun updateSelectedAudio(f: (AudioTrack) -> AudioTrack) {
         val id = selectedAudioId ?: return
-        commit(ProjectOps.updateAudio(project, id, f), record = panel == null)
+        commit(ProjectOps.updateAudio(project, id, f), coalesce = true)
     }
 
     /** Separates the selected clip's sound onto its own track ("Tách âm thanh"). */
@@ -353,12 +384,15 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
             commit(project.copy(overlays = project.overlays + fixed))
             clearSelection()
             selectedOverlayId = fixed.last().id
+            // Every video layer needs its own decoder; phones have a limited number of them.
+            val stacked = project.overlays.count { !it.isImage && start >= it.startMs && start < it.endMs }
+            if (stacked >= 4) toast = "Đang có $stacked video chồng cùng lúc, máy có thể xem trước chậm hoặc xuất lỗi"
         }
     }
 
     fun updateSelectedOverlay(f: (Overlay) -> Overlay) {
         val id = selectedOverlayId ?: return
-        commit(ProjectOps.updateOverlay(project, id, f), record = panel == null)
+        commit(ProjectOps.updateOverlay(project, id, f), coalesce = true)
     }
 
     fun deleteSelectedOverlay() {
@@ -376,16 +410,76 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
     }
 
     /** Moves the selected overlay so it starts at the playhead. */
-    fun moveOverlayToPlayhead() = updateSelectedOverlay { it.copy(startMs = playheadMs) }
+    fun moveOverlayToPlayhead() {
+        val id = selectedOverlayId ?: return
+        commit(ProjectOps.updateOverlay(project, id) { it.copy(startMs = playheadMs) })
+    }
+
+    /** Moves the selected overlay up (+1) or down (-1) in the stack of layers. */
+    fun restackSelectedOverlay(delta: Int) {
+        val id = selectedOverlayId ?: return
+        val moved = ProjectOps.restackOverlay(project, id, delta)
+        if (moved === project) {
+            toast = if (delta > 0) "Lớp phủ đã ở trên cùng" else "Lớp phủ đã ở dưới cùng"
+            return
+        }
+        commit(moved)
+        toast = if (delta > 0) "Đã đưa lớp phủ lên trên" else "Đã đưa lớp phủ xuống dưới"
+    }
+
+    fun openEraser() {
+        val o = selectedOverlay ?: return
+        preview.pause()
+        eraserOverlayId = o.id
+    }
+
+    fun closeEraser() {
+        eraserOverlayId = null
+    }
+
+    /**
+     * Saves the eraser drawing for [overlayId] as one undo step. Each save writes a new file so
+     * undo can go back to the previous drawing.
+     */
+    fun saveEraseMask(overlayId: String, mask: Bitmap?) {
+        eraserOverlayId = null
+        if (mask == null) {
+            commit(ProjectOps.updateOverlay(project, overlayId) { it.copy(eraseMask = null) })
+            return
+        }
+        busy = true
+        viewModelScope.launch {
+            val app = getApplication<Application>()
+            val file = withContext(Dispatchers.IO) {
+                runCatching {
+                    val dir = File(app.filesDir, "masks").apply { mkdirs() }
+                    File(dir, "erase_${overlayId}_${System.currentTimeMillis()}.png").also { f ->
+                        f.outputStream().use { mask.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                    }
+                }.getOrNull()
+            }
+            busy = false
+            if (file == null) {
+                toast = "Không lưu được vùng tẩy"
+                return@launch
+            }
+            commit(ProjectOps.updateOverlay(project, overlayId) { it.copy(eraseMask = file.absolutePath) })
+        }
+    }
 
     /** Called when a drag on the timeline starts, so the whole drag is one undo step. */
     fun beginDrag() {
         preview.pause()
-        pushHistory()
+        dragPending = true
     }
 
     /** Live update during a timeline drag (no history entry per frame). */
     fun dragUpdate(p: Project) {
+        if (p == project) return
+        if (dragPending) {
+            dragPending = false
+            pushHistory()
+        }
         project = p.copy(updatedAt = System.currentTimeMillis())
         preview.setProject(project)
         scheduleSave()
@@ -416,7 +510,7 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
                 sourceDurationMs = ms, startMs = old?.startMs ?: startMs, volume = old?.volume ?: 1f, voice = spec,
             )
             val audios = if (old != null) project.audios.map { if (it.id == old.id) track else it } else project.audios + track
-            commit(project.copy(audios = audios), record = panel == null)
+            commit(project.copy(audios = audios))
             clearSelection()
             selectedAudioId = track.id
             onDone(true)
@@ -429,7 +523,7 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
     fun addText(item: TextItem) {
         val index = selected ?: project.clipAt(playheadMs)?.first ?: return
         selected = index
-        commit(ProjectOps.updateClip(project, index) { it.copy(texts = it.texts + item) }, record = panel == null)
+        commit(ProjectOps.updateClip(project, index) { it.copy(texts = it.texts + item) })
         editingTextId = item.id
     }
 
@@ -438,7 +532,8 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
     }
 
     fun deleteText(id: String) {
-        updateSelected { c -> c.copy(texts = c.texts.filterNot { it.id == id }) }
+        val i = selected ?: return
+        commit(ProjectOps.updateClip(project, i) { c -> c.copy(texts = c.texts.filterNot { it.id == id }) })
         if (editingTextId == id) editingTextId = null
     }
 
@@ -466,6 +561,12 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
         saveNow()
         exporter.cancel()
         preview.release()
+    }
+
+    companion object {
+        /** Undo steps kept (also saved with the draft). */
+        const val MAX_UNDO = 5
+        private const val COALESCE_MS = 1000L
     }
 
     class Factory(private val app: Application, private val id: String) : ViewModelProvider.Factory {
