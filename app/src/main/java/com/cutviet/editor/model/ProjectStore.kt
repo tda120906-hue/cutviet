@@ -65,7 +65,7 @@ class ProjectStore(context: Context) {
         }
 
         private fun overlayJson(o: Overlay) = JSONObject().apply {
-            put("id", o.id); put("uri", o.uri); put("mime", o.mime ?: ""); put("isImage", o.isImage)
+            put("id", o.id); put("uri", o.uri); put("name", o.name); put("mime", o.mime ?: ""); put("isImage", o.isImage)
             put("sourceDurationMs", o.sourceDurationMs); put("width", o.width); put("height", o.height)
             put("hasAudio", o.hasAudio); put("trimStartMs", o.trimStartMs); put("trimEndMs", o.trimEndMs)
             put("startMs", o.startMs); put("speed", o.speed.toDouble()); put("volume", o.volume.toDouble())
@@ -147,7 +147,7 @@ class ProjectStore(context: Context) {
         }
 
         private fun overlayFrom(o: JSONObject): Overlay = Overlay(
-            id = o.getString("id"), uri = o.getString("uri"), mime = o.optString("mime").ifEmpty { null },
+            id = o.getString("id"), uri = o.getString("uri"), name = o.optString("name"), mime = o.optString("mime").ifEmpty { null },
             isImage = o.getBoolean("isImage"), sourceDurationMs = o.getLong("sourceDurationMs"),
             width = o.getInt("width"), height = o.getInt("height"), hasAudio = o.optBoolean("hasAudio", true),
             trimStartMs = o.getLong("trimStartMs"), trimEndMs = o.getLong("trimEndMs"), startMs = o.optLong("startMs"),

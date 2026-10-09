@@ -80,6 +80,9 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
     /** Timeline position under the playhead. */
     var playheadMs by mutableLongStateOf(0L)
 
+    /** Whether layers dragged on the timeline snap to clip edges, the playhead and other layers. */
+    var snapEnabled by mutableStateOf(true)
+
     /** Overlay being edited with the eraser (full-screen editor), if any. */
     var eraserOverlayId by mutableStateOf<String?>(null)
         private set
@@ -214,11 +217,15 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
         if (panel != null) closePanel()
     }
 
-    fun selectOverlay(id: String?) {
+    /** Selects an overlay; tapping the selected one again deselects it unless [toggle] is false. */
+    fun selectOverlay(id: String?, toggle: Boolean = true) {
+        if (!toggle && selectedOverlayId == id) return
         selected = null
         selectedAudioId = null
-        selectedOverlayId = if (selectedOverlayId == id) null else id
-        if (panel != null) closePanel()
+        selectedOverlayId = if (toggle && selectedOverlayId == id) null else id
+        // Overlay panels stay open and follow the newly selected layer.
+        val overlayPanel = panel == Panel.OVERLAY || panel == Panel.OVERLAY_KEY || panel == Panel.OVERLAY_MASK
+        if (panel != null && (selectedOverlayId == null || !overlayPanel)) closePanel()
     }
 
     fun selectAudio(id: String?) {

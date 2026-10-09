@@ -187,6 +187,8 @@ data class ShapeMask(
 data class Overlay(
     val id: String = newId(),
     val uri: String,
+    /** File name shown on the timeline. */
+    val name: String = "",
     val mime: String?,
     val isImage: Boolean,
     val sourceDurationMs: Long,

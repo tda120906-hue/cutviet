@@ -1,5 +1,6 @@
 package com.cutviet.editor.model
 
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -84,8 +85,9 @@ object ProjectOps {
      */
     fun restackOverlay(p: Project, id: String, delta: Int): Project {
         val i = p.overlays.indexOfFirst { it.id == id }
-        val to = i + delta
-        if (i < 0 || to !in p.overlays.indices) return p
+        if (i < 0) return p
+        val to = (i + delta).coerceIn(0, p.overlays.lastIndex)
+        if (to == i) return p
         val list = p.overlays.toMutableList()
         list.add(to, list.removeAt(i))
         return p.copy(overlays = list)
@@ -147,23 +149,47 @@ object ProjectOps {
         return a.copy(sourceEndMs = e)
     }
 
+    /** Longest an image can be stretched to on the timeline. */
+    const val MAX_IMAGE_MS = 30 * 60_000L
+
     /**
-     * Rows for overlays that follow the drawing order: an overlay is always on a higher row than
-     * every overlay it covers, so the timeline shows which layer is on top. Row 0 is the bottom.
+     * Drags the left edge of a main-track clip by [deltaMs] (timeline time). The clip keeps its
+     * place in the sequence, so this trims (or restores) its beginning; an image just gets shorter
+     * or longer.
      */
-    fun overlayRows(overlays: List<Overlay>): List<List<Overlay>> {
-        val rowOf = IntArray(overlays.size)
-        for (i in overlays.indices) {
-            val o = overlays[i]
-            var row = 0
-            for (j in 0 until i) {
-                val b = overlays[j]
-                if (b.startMs < o.endMs && o.startMs < b.endMs) row = max(row, rowOf[j] + 1)
-            }
-            rowOf[i] = row
+    fun stretchClipStart(c: Clip, deltaMs: Long): Clip {
+        if (c.isImage) return c.copy(trimStartMs = 0, trimEndMs = (c.trimmedMs - deltaMs).coerceIn(MIN_CLIP_MS, MAX_IMAGE_MS))
+        val s = (c.trimStartMs + (deltaMs * c.speed).toLong()).coerceIn(0, c.trimEndMs - MIN_CLIP_MS)
+        return c.copy(trimStartMs = s)
+    }
+
+    /** Drags the right edge of a main-track clip by [deltaMs]; images can be made as long as needed. */
+    fun stretchClipEnd(c: Clip, deltaMs: Long): Clip {
+        if (c.isImage) return c.copy(trimStartMs = 0, trimEndMs = (c.trimmedMs + deltaMs).coerceIn(MIN_CLIP_MS, MAX_IMAGE_MS))
+        val e = (c.trimEndMs + (deltaMs * c.speed).toLong()).coerceIn(c.trimStartMs + MIN_CLIP_MS, c.sourceDurationMs)
+        return c.copy(trimEndMs = e)
+    }
+
+    /** Returns [t] moved onto the nearest of [points] when it is within [thresholdMs], otherwise [t]. */
+    fun snap(t: Long, points: List<Long>, thresholdMs: Long): Long {
+        val best = points.minByOrNull { abs(it - t) } ?: return t
+        return if (abs(best - t) <= thresholdMs) best else t
+    }
+
+    /** Edges a dragged layer can snap to: start of the video, clip boundaries, the playhead and other overlays. */
+    fun snapPoints(p: Project, excludeOverlayId: String?, playheadMs: Long): List<Long> = buildList {
+        add(0L)
+        add(playheadMs)
+        var t = 0L
+        for (c in p.clips) {
+            t += c.durationMs
+            add(t)
         }
-        val count = (rowOf.maxOrNull() ?: -1) + 1
-        return (0 until count).map { r -> overlays.filterIndexed { i, _ -> rowOf[i] == r } }
+        for (o in p.overlays) {
+            if (o.id == excludeOverlayId) continue
+            add(o.startMs)
+            add(o.endMs)
+        }
     }
 
     /** Puts items into rows so that items in the same row never overlap in time. */

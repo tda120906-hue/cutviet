@@ -45,6 +45,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.rememberUpdatedState
@@ -57,6 +58,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -71,6 +73,7 @@ import androidx.compose.ui.unit.sp
 import com.cutviet.editor.media.Thumbnails
 import com.cutviet.editor.model.AudioKind
 import com.cutviet.editor.model.Clip
+import com.cutviet.editor.model.Overlay
 import com.cutviet.editor.model.Project
 import com.cutviet.editor.model.ProjectOps
 import com.cutviet.editor.ui.formatShort
@@ -90,13 +93,21 @@ private val ThumbWidth = 40.dp
  * Scrolling seeks the preview; playback scrolls the tracks.
  */
 @Composable
-fun Timeline(vm: EditorViewModel, onAddMusic: () -> Unit, onAddMedia: () -> Unit, modifier: Modifier = Modifier) {
+fun Timeline(
+    vm: EditorViewModel,
+    onAddMusic: () -> Unit,
+    onAddMedia: () -> Unit,
+    onAddOverlay: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val density = LocalDensity.current
     var pxPerSecond by remember { mutableFloatStateOf(with(density) { 48.dp.toPx() }) }
     val pxPerMs = pxPerSecond / 1000f
     val scroll = rememberScrollState()
     val project = vm.project
     val playing = vm.preview.isPlaying.value
+    // Dragged edges snap when they come this close to another edge.
+    val snapMs = (with(density) { 12.dp.toPx() } / pxPerMs).toLong()
 
     // Keep the playhead on the same time when zooming, then seek while the user scrolls.
     LaunchedEffect(pxPerMs) {
@@ -123,7 +134,7 @@ fun Timeline(vm: EditorViewModel, onAddMusic: () -> Unit, onAddMedia: () -> Unit
         }
     }
 
-    BoxWithConstraints(modifier.fillMaxWidth().heightIn(max = 250.dp).background(Color(0xFF0E0E11))) {
+    BoxWithConstraints(modifier.fillMaxWidth().heightIn(max = 270.dp).background(Color(0xFF0E0E11))) {
         val half = maxWidth / 2
         Column(
             Modifier
@@ -136,43 +147,32 @@ fun Timeline(vm: EditorViewModel, onAddMusic: () -> Unit, onAddMedia: () -> Unit
                     }
                 }
                 .horizontalScroll(scroll)
-                .padding(vertical = 10.dp),
+                .padding(vertical = 8.dp),
         ) {
             Ruler(project.durationMs, pxPerMs, half)
             Spacer(Modifier.height(4.dp))
             val totalWidth = with(density) { (project.durationMs * pxPerMs).toDp() }
 
-            // Overlay lanes (above the main track, like CapCut).
-            val overlayLanes = ProjectOps.overlayRows(project.overlays)
-            overlayLanes.asReversed().forEach { lane ->
-                LaneRow(half, totalWidth) {
-                    lane.forEach { ov ->
-                        LayerBar(
-                            vm = vm, startMs = ov.startMs, durationMs = ov.durationMs, pxPerMs = pxPerMs,
-                            color = Color(0xFF7A4CD9), label = if (ov.isImage) "Ảnh phủ" else "Video phủ",
-                            icon = Icons.Filled.Layers, selected = vm.selectedOverlayId == ov.id,
-                            thumb = Triple(ov.uri, ov.isImage, ov.trimStartMs),
-                            onClick = { vm.selectOverlay(ov.id) },
-                            onMove = { deltaMs ->
-                                ProjectOps.updateOverlay(vm.project, ov.id) { it.copy(startMs = (ov.startMs + deltaMs).coerceAtLeast(0)) }
-                            },
-                            onStretchStart = { deltaMs -> ProjectOps.updateOverlay(vm.project, ov.id) { ProjectOps.stretchOverlayStart(ov, deltaMs) } },
-                            onStretchEnd = { deltaMs -> ProjectOps.updateOverlay(vm.project, ov.id) { ProjectOps.stretchOverlayEnd(ov, deltaMs) } },
-                        )
-                    }
-                }
+            Row(Modifier.padding(bottom = 2.dp)) {
+                Spacer(Modifier.width(half))
+                SmallChip("Thêm lớp phủ", Icons.Filled.Layers, onAddOverlay)
             }
-            if (overlayLanes.isNotEmpty()) Spacer(Modifier.height(4.dp))
+            // One track per overlay, stacked like the picture: the top track is the top layer.
+            project.overlays.asReversed().forEach { ov ->
+                key(ov.id) { OverlayTrack(vm, ov, half, totalWidth, pxPerMs, snapMs) }
+            }
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            // Main track.
+            Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                 Spacer(Modifier.width(half))
                 project.clips.forEachIndexed { index, clip ->
-                    ClipBlock(
-                        clip = clip,
-                        width = with(density) { (clip.durationMs * pxPerMs).toDp() },
-                        selected = vm.selected == index,
-                        onClick = { vm.select(index) },
-                    )
+                    key(clip.id) {
+                        ClipBlock(
+                            vm = vm, index = index, clip = clip, pxPerMs = pxPerMs, snapMs = snapMs,
+                            width = with(density) { (clip.durationMs * pxPerMs).toDp() },
+                            selected = vm.selected == index,
+                        )
+                    }
                 }
                 Spacer(Modifier.width(8.dp))
                 Box(
@@ -204,7 +204,6 @@ fun Timeline(vm: EditorViewModel, onAddMusic: () -> Unit, onAddMedia: () -> Unit
                                 AudioKind.VOICE -> Icons.Filled.RecordVoiceOver
                             },
                             selected = vm.selectedAudioId == a.id,
-                            thumb = null,
                             onClick = { vm.selectAudio(a.id) },
                             onMove = { deltaMs ->
                                 ProjectOps.updateAudio(vm.project, a.id) { it.copy(startMs = (a.startMs + deltaMs).coerceAtLeast(0)) }
@@ -232,14 +231,7 @@ fun Timeline(vm: EditorViewModel, onAddMusic: () -> Unit, onAddMedia: () -> Unit
             }
             Row(Modifier.padding(top = 2.dp)) {
                 Spacer(Modifier.width(half))
-                Row(
-                    Modifier.height(28.dp).clip(RoundedCornerShape(6.dp)).background(Surface2)
-                        .clickable(onClick = onAddMusic).padding(horizontal = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(Icons.Filled.MusicNote, null, tint = Accent, modifier = Modifier.size(16.dp))
-                    Text(" Thêm âm thanh", color = Color.White, fontSize = 12.sp)
-                }
+                SmallChip("Thêm âm thanh", Icons.Filled.MusicNote, onAddMusic)
                 Spacer(Modifier.width(half))
             }
         }
@@ -251,12 +243,149 @@ fun Timeline(vm: EditorViewModel, onAddMusic: () -> Unit, onAddMedia: () -> Unit
         )
         Box(Modifier.align(Alignment.TopCenter).size(8.dp).clip(CircleShape).background(Color.White))
 
-        Column(Modifier.align(Alignment.CenterEnd).background(Color(0xCC0E0E11))) {
+        Column(Modifier.align(Alignment.CenterEnd).background(Color(0xCC0E0E11)), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                "Bám", color = if (vm.snapEnabled) Accent else Color(0xFF77777F), fontSize = 11.sp, fontWeight = FontWeight.Bold,
+                modifier = Modifier.clickable { vm.snapEnabled = !vm.snapEnabled }.padding(horizontal = 6.dp, vertical = 6.dp),
+            )
             IconButton(onClick = { pxPerSecond = (pxPerSecond * 1.5f).coerceAtMost(with(density) { 600.dp.toPx() }) }, modifier = Modifier.size(36.dp)) {
                 Icon(Icons.Filled.ZoomIn, "Phóng to", tint = Color.White, modifier = Modifier.size(20.dp))
             }
             IconButton(onClick = { pxPerSecond = (pxPerSecond / 1.5f).coerceAtLeast(with(density) { 2.dp.toPx() }) }, modifier = Modifier.size(36.dp)) {
                 Icon(Icons.Filled.ZoomOut, "Thu nhỏ", tint = Color.White, modifier = Modifier.size(20.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun SmallChip(text: String, icon: ImageVector, onClick: () -> Unit) {
+    Row(
+        Modifier.height(26.dp).clip(RoundedCornerShape(6.dp)).background(Surface2)
+            .clickable(onClick = onClick).padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, null, tint = Accent, modifier = Modifier.size(15.dp))
+        Text(" $text", color = Color.White, fontSize = 12.sp)
+    }
+}
+
+private val OverlayTrackHeight = 44.dp
+
+/**
+ * One overlay on its own track, drawn as a film strip like the main track. Tap selects; long-press
+ * and drag moves it in time, and up or down to another layer; the edge handles of the selected
+ * layer lengthen or shorten it.
+ */
+@Composable
+private fun OverlayTrack(vm: EditorViewModel, ov: Overlay, half: Dp, totalWidth: Dp, pxPerMs: Float, snapMs: Long) {
+    val density = LocalDensity.current
+    val current by rememberUpdatedState(ov)
+    var dragY by remember { mutableFloatStateOf(0f) }
+    val selected = vm.selectedOverlayId == ov.id
+    val width = with(density) { (ov.durationMs * pxPerMs).toDp() }.coerceAtLeast(24.dp)
+    Row(Modifier.padding(vertical = 2.dp)) {
+        Spacer(Modifier.width(half))
+        Box(Modifier.width(totalWidth).height(OverlayTrackHeight).background(Color(0xFF15151A))) {
+            Box(
+                Modifier
+                    .offset(x = with(density) { (ov.startMs * pxPerMs).toDp() })
+                    .width(width)
+                    .fillMaxHeight()
+                    .graphicsLayer { translationY = dragY }
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(Color(0xFF2A2340))
+                    .then(if (selected) Modifier.border(2.dp, Accent, RoundedCornerShape(6.dp)) else Modifier)
+                    .clickable { vm.selectOverlay(ov.id) }
+                    .pointerInput(ov.id, pxPerMs) {
+                        var totalX = 0f
+                        var origin: Overlay? = null
+                        val rowPx = (OverlayTrackHeight + 4.dp).toPx()
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = {
+                                totalX = 0f
+                                dragY = 0f
+                                origin = current
+                                vm.selectOverlay(current.id, toggle = false)
+                                vm.beginDrag()
+                            },
+                            onDrag = { change, drag ->
+                                change.consume()
+                                totalX += drag.x
+                                dragY += drag.y
+                                val o = origin ?: return@detectDragGesturesAfterLongPress
+                                var start = (o.startMs + (totalX / pxPerMs).toLong()).coerceAtLeast(0)
+                                if (vm.snapEnabled) {
+                                    val points = ProjectOps.snapPoints(vm.project, o.id, vm.playheadMs)
+                                    val snapped = ProjectOps.snap(start, points, snapMs)
+                                    start = if (snapped != start) snapped else ProjectOps.snap(start + o.durationMs, points, snapMs) - o.durationMs
+                                }
+                                vm.dragUpdate(ProjectOps.updateOverlay(vm.project, o.id) { it.copy(startMs = start.coerceAtLeast(0)) })
+                            },
+                            onDragEnd = {
+                                // Dragging up puts the layer above the ones it passed.
+                                val rows = -(dragY / rowPx).roundToInt()
+                                dragY = 0f
+                                origin?.let { if (rows != 0) vm.dragUpdate(ProjectOps.restackOverlay(vm.project, it.id, rows)) }
+                                origin = null
+                            },
+                            onDragCancel = {
+                                dragY = 0f
+                                origin = null
+                            },
+                        )
+                    },
+            ) {
+                FilmStrip(
+                    uri = ov.uri, isImage = ov.isImage, durationMs = ov.durationMs, width = width,
+                    sourceTimeAt = { offset -> ov.trimStartMs + (offset * ov.speed).toLong() },
+                )
+                Row(
+                    Modifier.align(Alignment.TopStart).padding(start = if (selected) 16.dp else 4.dp, top = 3.dp)
+                        .background(Color(0x99000000), RoundedCornerShape(3.dp)).padding(horizontal = 4.dp, vertical = 1.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Filled.Layers, null, tint = Color.White, modifier = Modifier.size(11.dp))
+                    Text(
+                        " " + ov.name.ifEmpty { if (ov.isImage) "Ảnh phủ" else "Video phủ" } + "  " + formatShort(ov.durationMs),
+                        color = Color.White, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (selected) {
+                    Handle(Modifier.align(Alignment.CenterStart), pxPerMs, vm) { deltaMs ->
+                        var newStart = ov.startMs + deltaMs
+                        if (vm.snapEnabled) newStart = ProjectOps.snap(newStart, ProjectOps.snapPoints(vm.project, ov.id, vm.playheadMs), snapMs)
+                        ProjectOps.updateOverlay(vm.project, ov.id) { ProjectOps.stretchOverlayStart(ov, newStart - ov.startMs) }
+                    }
+                    Handle(Modifier.align(Alignment.CenterEnd), pxPerMs, vm) { deltaMs ->
+                        var newEnd = ov.endMs + deltaMs
+                        if (vm.snapEnabled) newEnd = ProjectOps.snap(newEnd, ProjectOps.snapPoints(vm.project, ov.id, vm.playheadMs), snapMs)
+                        ProjectOps.updateOverlay(vm.project, ov.id) { ProjectOps.stretchOverlayEnd(ov, newEnd - ov.endMs) }
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.width(half))
+    }
+}
+
+/** Thumbnails across a layer, taken from the part of the source it plays. */
+@Composable
+private fun FilmStrip(uri: String, isImage: Boolean, durationMs: Long, width: Dp, sourceTimeAt: (Long) -> Long) {
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    val thumbCount = ceil(width / ThumbWidth).toInt().coerceIn(1, 24)
+    val thumbPx = with(density) { 96.dp.roundToPx() }
+    Row(Modifier.fillMaxSize()) {
+        for (i in 0 until thumbCount) {
+            val time = if (isImage) 0L else sourceTimeAt((durationMs * (i + 0.5f) / thumbCount).toLong())
+            val bmp by produceState<Bitmap?>(null, uri, time / 250) {
+                value = Thumbnails.get(context, uri, isImage, time, thumbPx)
+            }
+            Box(Modifier.weight(1f).fillMaxHeight()) {
+                bmp?.let {
+                    Image(it.asImageBitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                }
             }
         }
     }
@@ -272,7 +401,7 @@ private fun LaneRow(half: Dp, totalWidth: Dp, content: @Composable BoxScope.() -
 }
 
 /**
- * A layer on an overlay/audio lane. Tap selects it; long-press and drag moves it in time;
+ * A layer on an audio lane. Tap selects it; long-press and drag moves it in time;
  * when selected, the white handles on each end stretch it (trim) like in CapCut.
  */
 @Composable
@@ -285,18 +414,13 @@ private fun BoxScope.LayerBar(
     label: String,
     icon: ImageVector,
     selected: Boolean,
-    thumb: Triple<String, Boolean, Long>?,
     onClick: () -> Unit,
     onMove: (Long) -> Project,
     onStretchStart: ((Long) -> Project)?,
     onStretchEnd: ((Long) -> Project)?,
 ) {
     val density = LocalDensity.current
-    val context = LocalContext.current
     val move by rememberUpdatedState(onMove)
-    val bmp by produceState<Bitmap?>(null, thumb) {
-        value = thumb?.let { Thumbnails.get(context, it.first, it.second, it.third, 96) }
-    }
     Box(
         Modifier
             .offset(x = with(density) { (startMs * pxPerMs).toDp() })
@@ -321,10 +445,7 @@ private fun BoxScope.LayerBar(
             },
     ) {
         Row(Modifier.fillMaxSize().padding(horizontal = if (selected) 14.dp else 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            bmp?.let {
-                Image(it.asImageBitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.size(24.dp).clip(RoundedCornerShape(3.dp)))
-                Spacer(Modifier.width(4.dp))
-            } ?: Icon(icon, null, tint = Color.White, modifier = Modifier.size(14.dp))
+            Icon(icon, null, tint = Color.White, modifier = Modifier.size(14.dp))
             Text(" $label", color = Color.White, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         if (selected) {
@@ -384,11 +505,7 @@ private fun Ruler(durationMs: Long, pxPerMs: Float, half: Dp) {
 }
 
 @Composable
-private fun ClipBlock(clip: Clip, width: Dp, selected: Boolean, onClick: () -> Unit) {
-    val context = LocalContext.current
-    val density = LocalDensity.current
-    val thumbCount = ceil(width / ThumbWidth).toInt().coerceIn(1, 24)
-    val thumbPx = with(density) { 96.dp.roundToPx() }
+private fun ClipBlock(vm: EditorViewModel, index: Int, clip: Clip, pxPerMs: Float, snapMs: Long, width: Dp, selected: Boolean) {
     Box(
         Modifier
             .width(width)
@@ -397,24 +514,11 @@ private fun ClipBlock(clip: Clip, width: Dp, selected: Boolean, onClick: () -> U
             .clip(RoundedCornerShape(6.dp))
             .background(Surface2)
             .then(if (selected) Modifier.border(BorderStroke(2.5.dp, Color.White), RoundedCornerShape(6.dp)) else Modifier)
-            .clickable(onClick = onClick),
+            .clickable { vm.select(index) },
     ) {
-        Row(Modifier.fillMaxSize()) {
-            for (i in 0 until thumbCount) {
-                val offset = (clip.durationMs * (i + 0.5f) / thumbCount).toLong()
-                val time = clip.sourceTimeAt(offset)
-                val bmp by produceState<Bitmap?>(null, clip.uri, time / 250) {
-                    value = Thumbnails.get(context, clip.uri, clip.isImage, time, thumbPx)
-                }
-                Box(Modifier.weight(1f).fillMaxHeight()) {
-                    bmp?.let {
-                        Image(it.asImageBitmap(), null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-                    }
-                }
-            }
-        }
+        FilmStrip(uri = clip.uri, isImage = clip.isImage, durationMs = clip.durationMs, width = width, sourceTimeAt = clip::sourceTimeAt)
         Row(
-            Modifier.align(Alignment.TopStart).padding(3.dp),
+            Modifier.align(Alignment.TopStart).padding(start = if (selected) 16.dp else 3.dp, top = 3.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (!clip.isImage && clip.speed != 1f) Badge(formatSpeed(clip.speed), AccentPink)
@@ -429,9 +533,25 @@ private fun ClipBlock(clip: Clip, width: Dp, selected: Boolean, onClick: () -> U
         if (selected) {
             Text(
                 formatShort(clip.durationMs), color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold,
-                modifier = Modifier.align(Alignment.BottomStart).padding(3.dp)
+                modifier = Modifier.align(Alignment.BottomStart).padding(start = 16.dp, bottom = 3.dp)
                     .background(Color(0x99000000), RoundedCornerShape(3.dp)).padding(horizontal = 3.dp),
             )
+            // Edge handles: trim a video, or make a picture shorter/longer.
+            Handle(Modifier.align(Alignment.CenterStart), pxPerMs, vm) { deltaMs ->
+                ProjectOps.updateClip(vm.project, index) { ProjectOps.stretchClipStart(clip, deltaMs) }
+            }
+            Handle(Modifier.align(Alignment.CenterEnd), pxPerMs, vm) { deltaMs ->
+                var d = deltaMs
+                if (vm.snapEnabled) {
+                    val end = vm.project.clipStartMs(index) + clip.durationMs
+                    val points = buildList {
+                        add(vm.playheadMs)
+                        vm.project.overlays.forEach { add(it.startMs); add(it.endMs) }
+                    }
+                    d = ProjectOps.snap(end + deltaMs, points, snapMs) - end
+                }
+                ProjectOps.updateClip(vm.project, index) { ProjectOps.stretchClipEnd(clip, d) }
+            }
         }
     }
 }

@@ -123,14 +123,20 @@ class ProjectOpsTest {
     }
 
     @Test
-    fun overlayRowsFollowStackingOrder() {
-        val bottom = overlay(5_000, startMs = 0)
-        val later = overlay(2_000, startMs = 6_000)
-        val top = overlay(3_000, startMs = 1_000)
-        val rows = ProjectOps.overlayRows(listOf(bottom, later, top))
-        assertEquals(listOf(listOf(bottom, later), listOf(top)), rows)
-        // Moving the top layer down puts it on the bottom row.
-        val swapped = ProjectOps.overlayRows(listOf(top, bottom, later))
-        assertEquals(listOf(listOf(top, later), listOf(bottom)), swapped)
+    fun stretchingClipsTrimsVideoAndResizesImages() {
+        val v = video(10_000).copy(trimStartMs = 1_000, trimEndMs = 9_000)
+        assertEquals(1_500, ProjectOps.stretchClipStart(v, 500).trimStartMs)
+        assertEquals(0, ProjectOps.stretchClipStart(v, -5_000).trimStartMs)
+        assertEquals(10_000, ProjectOps.stretchClipEnd(v, 99_000).trimEndMs)
+        val img = Clip(uri = "content://i", mime = "image/jpeg", isImage = true, sourceDurationMs = 3_000, width = 100, height = 100)
+        assertEquals(5_000, ProjectOps.stretchClipEnd(img, 2_000).durationMs)
+        assertEquals(2_000, ProjectOps.stretchClipStart(img, 1_000).durationMs)
+        assertEquals(ProjectOps.MIN_CLIP_MS, ProjectOps.stretchClipStart(img, 9_000).durationMs)
+    }
+
+    @Test
+    fun snapPullsToNearbyEdgesOnly() {
+        assertEquals(5_000, ProjectOps.snap(5_080, listOf(0, 5_000, 9_000), 100))
+        assertEquals(5_300, ProjectOps.snap(5_300, listOf(0, 5_000, 9_000), 100))
     }
 }

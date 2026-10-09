@@ -188,6 +188,7 @@ private fun EditorContent(vm: EditorViewModel, onBack: () -> Unit) {
                 update = { if (it.player !== player) it.player = player },
                 modifier = Modifier.fillMaxSize(),
             )
+            OverlayGizmo(vm, Modifier.fillMaxSize())
             if (vm.project.clips.isEmpty()) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("Dự án trống", color = TextDim)
@@ -226,7 +227,7 @@ private fun EditorContent(vm: EditorViewModel, onBack: () -> Unit) {
         }
 
         Timeline(
-            vm, onAddMusic = { addMusic() }, onAddMedia = { addMedia() },
+            vm, onAddMusic = { addMusic() }, onAddMedia = { addMedia() }, onAddOverlay = { addOverlay() },
             modifier = if (typing) Modifier.heightIn(max = 130.dp) else Modifier,
         )
 

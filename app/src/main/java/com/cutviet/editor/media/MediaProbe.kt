@@ -104,7 +104,7 @@ object MediaProbe {
     fun probeOverlay(context: Context, uri: Uri, startMs: Long): Overlay? {
         val c = probeClip(context, uri) ?: return null
         return Overlay(
-            uri = c.uri, mime = c.mime, isImage = c.isImage, sourceDurationMs = c.sourceDurationMs,
+            uri = c.uri, name = displayName(context, uri) ?: "", mime = c.mime, isImage = c.isImage, sourceDurationMs = c.sourceDurationMs,
             width = c.width, height = c.height, hasAudio = c.hasAudio, startMs = startMs,
         )
     }

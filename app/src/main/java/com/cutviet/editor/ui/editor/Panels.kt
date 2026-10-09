@@ -631,11 +631,30 @@ private fun AudioPanel(vm: EditorViewModel) {
 private fun OverlayPanel(vm: EditorViewModel) {
     val o = vm.selectedOverlay ?: return
     fun set(f: (com.cutviet.editor.model.Overlay) -> com.cutviet.editor.model.Overlay) = vm.updateSelectedOverlay(f)
+    Text(o.name.ifEmpty { if (o.isImage) "Ảnh phủ" else "Video phủ" }, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    InfoRow("Bắt đầu", formatTime(o.startMs))
+    InfoRow("Thời lượng", formatTime(o.durationMs))
+    if (!o.isImage) InfoRow("Đoạn trong tệp gốc", "${formatTime(o.trimStartMs)} – ${formatTime(o.trimEndMs)}")
     Text(
-        "${formatTime(o.startMs)} → ${formatTime(o.endMs)} · giữ và kéo thanh tím trên dòng thời gian để di chuyển, kéo hai mép trắng để kéo dãn",
-        color = TextDim, fontSize = 11.sp,
+        "Kéo lớp phủ trên khung xem trước để di chuyển, kéo góc dưới bên phải để đổi kích thước. " +
+            "Trên dòng thời gian: kéo hai mép để kéo dài/thu ngắn, giữ rồi kéo để dời hoặc đổi tầng.",
+        color = TextDim, fontSize = 11.sp, modifier = Modifier.padding(vertical = 4.dp),
     )
-    LabeledSlider("Kích thước", o.scale, 0.1f..1.5f, "${pct(o.scale)}%") { v -> set { it.copy(scale = v) } }
+    val (canvasW, canvasH) = ProjectOps.canvasSize(vm.project)
+    Row(Modifier.horizontalScroll(rememberScrollState())) {
+        OutlinedButton(onClick = { set { it.copy(x = 0.5f, y = 0.5f) } }) { Text("Về giữa khung") }
+        Spacer(Modifier.width(6.dp))
+        OutlinedButton(onClick = {
+            // Scale is relative to "fit inside the frame"; make the width match the frame instead.
+            set {
+                val fit = minOf(canvasW.toFloat() / it.width.coerceAtLeast(1), canvasH.toFloat() / it.height.coerceAtLeast(1))
+                it.copy(x = 0.5f, scale = (canvasW / (it.width * fit)).coerceIn(0.05f, 4f), rotation = 0f)
+            }
+        }) { Text("Phủ kín chiều ngang") }
+        Spacer(Modifier.width(6.dp))
+        OutlinedButton(onClick = { set { it.copy(scale = 1f, x = 0.5f, y = 0.5f, rotation = 0f) } }) { Text("Vừa khung") }
+    }
+    LabeledSlider("Kích thước", o.scale, 0.05f..3f, "${pct(o.scale)}%") { v -> set { it.copy(scale = v) } }
     LabeledSlider("Vị trí ngang", o.x, 0f..1f, pct(o.x)) { v -> set { it.copy(x = v) } }
     LabeledSlider("Vị trí dọc", o.y, 0f..1f, pct(o.y)) { v -> set { it.copy(y = v) } }
     LabeledSlider("Xoay", o.rotation, -180f..180f, "${o.rotation.roundToInt()}°") { v -> set { it.copy(rotation = v.roundToInt().toFloat()) } }
@@ -674,9 +693,15 @@ private fun OverlayPanel(vm: EditorViewModel) {
         Spacer(Modifier.width(6.dp))
         OutlinedButton(onClick = { set { it.copy(flipH = !it.flipH) } }) { Text("Lật ngang") }
         Spacer(Modifier.width(6.dp))
-        OutlinedButton(onClick = { set { it.copy(scale = 1f, x = 0.5f, y = 0.5f, rotation = 0f) } }) { Text("Toàn khung") }
-        Spacer(Modifier.width(6.dp))
         OutlinedButton(onClick = { vm.deleteSelectedOverlay() }) { Text("Xóa", color = Color(0xFFFF6B6B)) }
+    }
+}
+
+@Composable
+private fun InfoRow(label: String, value: String) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
+        Text(label, color = TextDim, fontSize = 12.sp, modifier = Modifier.weight(1f))
+        Text(value, color = Color.White, fontSize = 12.sp)
     }
 }
 
