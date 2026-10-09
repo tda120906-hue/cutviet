@@ -1,0 +1,30 @@
+name: API probe
+on:
+  push:
+    branches: [api-probe]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Versions
+        run: |
+          for a in media3-transformer; do curl -s https://dl.google.com/android/maven2/androidx/media3/$a/maven-metadata.xml | grep -o '<version>[^<]*</version>' | tr '\n' ' '; echo; done
+          curl -s https://dl.google.com/android/maven2/androidx/compose/compose-bom/maven-metadata.xml | grep -o '<version>[^<]*</version>' | tail -5 | tr '\n' ' '; echo
+          curl -s https://dl.google.com/android/maven2/com/android/tools/build/gradle/maven-metadata.xml | grep -o '<version>[^<]*</version>' | tail -8 | tr '\n' ' '; echo
+      - name: Javap
+        run: |
+          set +e
+          LATEST=$(curl -s https://dl.google.com/android/maven2/androidx/media3/media3-transformer/maven-metadata.xml | grep -o '<release>[^<]*' | sed 's/<release>//')
+          echo "LATEST=$LATEST"
+          for V in 1.5.1 $LATEST; do
+            mkdir -p j$V; cd j$V
+            for a in media3-transformer media3-effect media3-common media3-exoplayer; do
+              curl -sfLo $a.aar https://dl.google.com/android/maven2/androidx/media3/$a/$V/$a-$V.aar && unzip -qo $a.aar classes.jar && mv classes.jar $a.jar
+            done
+            CP=$(ls *.jar | tr '\n' ':')
+            echo "================= $V"
+            for c in androidx.media3.transformer.Composition\$Builder androidx.media3.transformer.EditedMediaItemSequence androidx.media3.transformer.EditedMediaItemSequence\$Builder androidx.media3.transformer.EditedMediaItem\$Builder androidx.media3.transformer.Effects androidx.media3.transformer.CompositionPlayer androidx.media3.transformer.CompositionPlayer\$Builder androidx.media3.common.VideoCompositorSettings androidx.media3.common.OverlaySettings androidx.media3.effect.StaticOverlaySettings androidx.media3.effect.StaticOverlaySettings\$Builder androidx.media3.effect.OverlaySettings androidx.media3.effect.OverlaySettings\$Builder androidx.media3.effect.BitmapOverlay androidx.media3.effect.GlEffect androidx.media3.effect.BaseGlShaderProgram androidx.media3.effect.GlShaderProgram androidx.media3.effect.DefaultVideoCompositor androidx.media3.common.audio.ChannelMixingAudioProcessor androidx.media3.common.audio.ChannelMixingMatrix androidx.media3.common.util.GlProgram androidx.media3.effect.AlphaScale androidx.media3.effect.ScaleAndRotateTransformation\$Builder; do
+              echo "--- $c"; javap -cp "$CP" "$c" 2>&1 | grep -v '^Compiled'
+            done
+            cd ..
+          done
