@@ -5,13 +5,22 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.core.view.WindowCompat
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import com.cutviet.editor.ui.editor.EditorScreen
 import com.cutviet.editor.ui.home.HomeScreen
 import com.cutviet.editor.ui.theme.CutVietTheme
@@ -22,21 +31,28 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        WindowCompat.setDecorFitsSystemWindows(window, true)
+        // Android 15+ always draws apps edge to edge, so keep the UI clear of the status bar,
+        // navigation bar and keyboard ourselves.
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.BLACK),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.BLACK),
+        )
         if (savedInstanceState == null) handleIntent(intent)
         setContent {
             CutVietTheme {
-                var openProject by rememberSaveable { mutableStateOf<String?>(null) }
-                val current = openProject
-                if (current == null) {
-                    HomeScreen(
-                        sharedUris = sharedUris.value,
-                        onSharedConsumed = { sharedUris.value = emptyList() },
-                        onOpen = { openProject = it },
-                    )
-                } else {
-                    BackHandler { openProject = null }
-                    EditorScreen(projectId = current, onBack = { openProject = null })
+                Box(Modifier.fillMaxSize().background(Color.Black).windowInsetsPadding(WindowInsets.safeDrawing)) {
+                    var openProject by rememberSaveable { mutableStateOf<String?>(null) }
+                    val current = openProject
+                    if (current == null) {
+                        HomeScreen(
+                            sharedUris = sharedUris.value,
+                            onSharedConsumed = { sharedUris.value = emptyList() },
+                            onOpen = { openProject = it },
+                        )
+                    } else {
+                        BackHandler { openProject = null }
+                        EditorScreen(projectId = current, onBack = { openProject = null })
+                    }
                 }
             }
         }

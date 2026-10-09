@@ -13,6 +13,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -110,6 +114,7 @@ fun EditorScreen(projectId: String, onBack: () -> Unit) {
     EditorContent(vm, onBack)
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun EditorContent(vm: EditorViewModel, onBack: () -> Unit) {
     val context = LocalContext.current
@@ -158,6 +163,9 @@ private fun EditorContent(vm: EditorViewModel, onBack: () -> Unit) {
         onDispose { view.keepScreenOn = false }
     }
 
+    // While the keyboard is open (typing a text or a voice-over) the preview, timeline and panel
+    // shrink so everything still fits above the keyboard.
+    val typing = WindowInsets.isImeVisible
     Column(Modifier.fillMaxSize().background(Color.Black)) {
         TopBar(vm, onBack, onExport = { openExport() })
 
@@ -198,7 +206,7 @@ private fun EditorContent(vm: EditorViewModel, onBack: () -> Unit) {
         }
 
         // Transport.
-        Row(
+        if (!typing) Row(
             Modifier.fillMaxWidth().background(Color(0xFF0E0E11)).padding(horizontal = 12.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -213,11 +221,14 @@ private fun EditorContent(vm: EditorViewModel, onBack: () -> Unit) {
             Spacer(Modifier.weight(1f))
         }
 
-        Timeline(vm, onAddMusic = { addMusic() }, onAddMedia = { addMedia() })
+        Timeline(
+            vm, onAddMusic = { addMusic() }, onAddMedia = { addMedia() },
+            modifier = if (typing) Modifier.heightIn(max = 130.dp) else Modifier,
+        )
 
         val panel = vm.panel
         if (panel != null) {
-            PanelHost(vm, panel)
+            PanelHost(vm, panel, Modifier.height(if (typing) 220.dp else 290.dp))
         } else {
             Toolbar(vm, onAddMedia = { addMedia() }, onAddMusic = { addMusic() }, onAddOverlay = { addOverlay() })
         }

@@ -9,7 +9,14 @@ Xuất video giữ nguyên độ phân giải, khung hình/giây và bitrate tư
 - Dòng thời gian kiểu CapCut: đầu phát cố định ở giữa, kéo để tua, phóng to/thu nhỏ, ảnh thu nhỏ từng đoạn
 - Tách, cắt đầu/cuối, xóa, nhân bản, đổi thứ tự đoạn; hoàn tác / làm lại
 - Tốc độ 0.25x–4x (âm thanh đổi theo, giữ cao độ)
-- Âm lượng từng đoạn (0–200%), tắt tiếng; nhạc nền (từ tệp âm thanh hoặc trích từ video), chọn điểm bắt đầu, lặp lại, âm lượng nhạc
+- Âm lượng từng đoạn (0–200%), tắt tiếng
+- Nhiều lớp âm thanh: nhạc (từ tệp âm thanh hoặc video), âm thanh tách từ đoạn video ("Tách âm thanh"), giọng đọc;
+  mỗi lớp có âm lượng, tốc độ, cắt đoạn, lặp lại, kéo dãn hai mép và giữ-kéo để di chuyển trên dòng thời gian
+- Lớp phủ (video hoặc ảnh chồng lên video chính): vị trí, kích thước, xoay, độ trong suốt, lật, âm lượng và tốc độ riêng,
+  kéo dãn hai mép, giữ-kéo để di chuyển, nhân bản, xóa
+- Tẩy nền lớp phủ (phông xanh lá/xanh dương, nền đen/trắng hoặc màu tùy chọn) với cường độ và làm mềm viền
+- Giọng đọc AI tiếng Việt từ văn bản (dùng giọng tiếng Việt có trên điện thoại): nhiều giọng, mẫu giọng, tốc độ 0.5x–3x,
+  ước tính thời lượng ngay khi gõ và đo chính xác sau đó, hiện đoạn video mà giọng đọc sẽ phủ lên
 - Xoay 90°, lật ngang/dọc, cắt khung theo tỉ lệ, thu phóng và di chuyển vùng cắt
 - Tỉ lệ khung hình dự án: Gốc, 9:16, 16:9, 1:1, 4:5, 3:4, 4:3, 21:9; vừa khung hoặc lấp đầy
 - 11 bộ lọc màu; điều chỉnh độ sáng, tương phản, bão hòa, nhiệt độ màu, sắc độ; áp dụng cho tất cả các đoạn
@@ -19,7 +26,7 @@ Xuất video giữ nguyên độ phân giải, khung hình/giây và bitrate tư
 
 ## Build
 
-Cần JDK 17 và Android SDK (platform 35).
+Cần JDK 17 và Android SDK (platform 36).
 
 ```
 ./gradlew assembleRelease

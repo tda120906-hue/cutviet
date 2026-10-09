@@ -96,8 +96,8 @@ import java.util.Locale
 import kotlin.math.roundToInt
 
 @Composable
-fun PanelHost(vm: EditorViewModel, panel: Panel) {
-    Column(Modifier.fillMaxWidth().height(290.dp).background(Color(0xFF141418))) {
+fun PanelHost(vm: EditorViewModel, panel: Panel, modifier: Modifier = Modifier.height(290.dp)) {
+    Column(modifier.fillMaxWidth().background(Color(0xFF141418))) {
         Row(
             Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
