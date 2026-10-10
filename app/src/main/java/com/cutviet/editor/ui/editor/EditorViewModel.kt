@@ -40,7 +40,6 @@ enum class Panel(val title: String) {
     SPEED("Tốc độ"),
     VOLUME("Âm lượng"),
     TRANSFORM("Xoay & lật"),
-    CROP("Cắt khung"),
     FILTER("Bộ lọc"),
     ADJUST("Điều chỉnh"),
     TEXT("Văn bản"),
@@ -82,6 +81,10 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
 
     /** Whether layers dragged on the timeline snap to clip edges, the playhead and other layers. */
     var snapEnabled by mutableStateOf(true)
+
+    /** Clip being edited in the full-screen crop editor, if any. */
+    var cropClipId by mutableStateOf<String?>(null)
+        private set
 
     /** Overlay being edited with the eraser (full-screen editor), if any. */
     var eraserOverlayId by mutableStateOf<String?>(null)
@@ -432,6 +435,29 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
         }
         commit(moved)
         toast = if (delta > 0) "Đã đưa lớp phủ lên trên" else "Đã đưa lớp phủ xuống dưới"
+    }
+
+    /** Opens the crop editor ("Cắt khung") for the selected clip. */
+    fun openCrop() {
+        val c = selectedClip ?: return
+        preview.pause()
+        cropClipId = c.id
+    }
+
+    fun closeCrop() {
+        cropClipId = null
+    }
+
+    /** Applies what was set in the crop editor as one undo step. */
+    fun saveCrop(edited: Clip) {
+        cropClipId = null
+        val i = project.clips.indexOfFirst { it.id == edited.id }
+        if (i < 0) return
+        commit(
+            ProjectOps.updateClip(project, i) {
+                it.copy(rotation = edited.rotation, flipH = edited.flipH, flipV = edited.flipV, crop = edited.crop)
+            },
+        )
     }
 
     fun openEraser() {

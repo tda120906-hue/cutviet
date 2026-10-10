@@ -106,8 +106,9 @@ class ProjectStore(context: Context) {
             put("trimStartMs", c.trimStartMs); put("trimEndMs", c.trimEndMs)
             put("speed", c.speed.toDouble()); put("volume", c.volume.toDouble())
             put("rotation", c.rotation); put("flipH", c.flipH); put("flipV", c.flipV)
-            put("cropAspect", c.crop.aspect?.toDouble() ?: -1.0); put("cropZoom", c.crop.zoom.toDouble())
-            put("cropX", c.crop.centerX.toDouble()); put("cropY", c.crop.centerY.toDouble())
+            put("cropAspect", c.crop.aspect?.toDouble() ?: -1.0); put("cropStraighten", c.crop.straighten.toDouble())
+            put("cropL", c.crop.left.toDouble()); put("cropT", c.crop.top.toDouble())
+            put("cropR", c.crop.right.toDouble()); put("cropB", c.crop.bottom.toDouble())
             put("filter", c.filter.name)
             put("brightness", c.adjust.brightness.toDouble()); put("contrast", c.adjust.contrast.toDouble())
             put("saturation", c.adjust.saturation.toDouble()); put("warmth", c.adjust.warmth.toDouble())
@@ -200,7 +201,24 @@ class ProjectStore(context: Context) {
                     isSticker = t.optBoolean("isSticker"),
                 )
             }
-            val cropAspect = o.optDouble("cropAspect", -1.0)
+            val cropAspect = o.optDouble("cropAspect", -1.0).takeIf { it > 0 }?.toFloat()
+            val rotation = o.optInt("rotation")
+            val crop = if (o.has("cropL")) {
+                CropSpec(
+                    left = o.optDouble("cropL", 0.0).toFloat(), top = o.optDouble("cropT", 0.0).toFloat(),
+                    right = o.optDouble("cropR", 1.0).toFloat(), bottom = o.optDouble("cropB", 1.0).toFloat(),
+                    aspect = cropAspect, straighten = CropOps.clampStraighten(o.optDouble("cropStraighten", 0.0).toFloat()),
+                )
+            } else {
+                // Drafts from before 1.0.8 stored ratio, zoom and centre.
+                val w = o.getInt("width")
+                val h = o.getInt("height")
+                CropOps.fromLegacy(
+                    cropAspect, o.optDouble("cropZoom", 1.0).toFloat(),
+                    o.optDouble("cropX", 0.5).toFloat(), o.optDouble("cropY", 0.5).toFloat(),
+                    if (rotation % 180 == 0) w else h, if (rotation % 180 == 0) h else w,
+                )
+            }
             return Clip(
                 id = o.getString("id"), uri = o.getString("uri"), mime = o.optString("mime").ifEmpty { null },
                 isImage = o.getBoolean("isImage"), sourceDurationMs = o.getLong("sourceDurationMs"),
@@ -208,12 +226,8 @@ class ProjectStore(context: Context) {
                 frameRate = o.optDouble("frameRate", 30.0).toFloat(), hasAudio = o.optBoolean("hasAudio", true),
                 trimStartMs = o.getLong("trimStartMs"), trimEndMs = o.getLong("trimEndMs"),
                 speed = o.optDouble("speed", 1.0).toFloat(), volume = o.optDouble("volume", 1.0).toFloat(),
-                rotation = o.optInt("rotation"), flipH = o.optBoolean("flipH"), flipV = o.optBoolean("flipV"),
-                crop = CropSpec(
-                    aspect = if (cropAspect > 0) cropAspect.toFloat() else null,
-                    zoom = o.optDouble("cropZoom", 1.0).toFloat(),
-                    centerX = o.optDouble("cropX", 0.5).toFloat(), centerY = o.optDouble("cropY", 0.5).toFloat(),
-                ),
+                rotation = rotation, flipH = o.optBoolean("flipH"), flipV = o.optBoolean("flipV"),
+                crop = crop,
                 filter = runCatching { FilterPreset.valueOf(o.optString("filter")) }.getOrDefault(FilterPreset.NONE),
                 adjust = Adjustments(
                     brightness = o.optDouble("brightness", 0.0).toFloat(), contrast = o.optDouble("contrast", 0.0).toFloat(),

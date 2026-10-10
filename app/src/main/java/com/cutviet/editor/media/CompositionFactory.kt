@@ -274,6 +274,7 @@ object CompositionFactory {
                 .setRotationDegrees(((360 - c.rotation) % 360).toFloat())
                 .build()
         }
+        if (c.crop.straighten != 0f) video += StraightenTransformation(c.crop.straighten)
         cropEffect(c)?.let { video += it }
         video += filterEffects(c.filter)
         video += adjustEffects(c.adjust)
@@ -304,27 +305,16 @@ object CompositionFactory {
         }
     }
 
-    /** Converts the crop window to Media3's normalized device coordinates. */
+    /** Converts the crop window to Media3's normalized device coordinates (y up). */
     private fun cropEffect(c: Clip): Effect? {
         val s: CropSpec = c.crop
-        if (s.isIdentity) return null
-        val w = c.rotatedWidth.toFloat().coerceAtLeast(1f)
-        val h = c.rotatedHeight.toFloat().coerceAtLeast(1f)
-        val aspect = s.aspect ?: (w / h)
-        var cw: Float
-        var ch: Float
-        if (w / h > aspect) { ch = h; cw = h * aspect } else { cw = w; ch = w / aspect }
-        val zoom = s.zoom.coerceAtLeast(1f)
-        cw /= zoom; ch /= zoom
-        val nw = cw / w
-        val nh = ch / h
-        val cx = s.centerX.coerceIn(nw / 2, 1 - nw / 2)
-        val cy = s.centerY.coerceIn(nh / 2, 1 - nh / 2)
-        val left = (cx - nw / 2) * 2 - 1
-        val right = (cx + nw / 2) * 2 - 1
-        val top = 1 - (cy - nh / 2) * 2
-        val bottom = 1 - (cy + nh / 2) * 2
-        return Crop(left, right, bottom, top)
+        if (s.isFull) return null
+        val l = s.left.coerceIn(0f, 1f)
+        val r = s.right.coerceIn(l, 1f)
+        val t = s.top.coerceIn(0f, 1f)
+        val b = s.bottom.coerceIn(t, 1f)
+        if (r - l < 0.01f || b - t < 0.01f) return null
+        return Crop(l * 2 - 1, r * 2 - 1, 1 - b * 2, 1 - t * 2)
     }
 
     fun filterEffects(f: FilterPreset): List<Effect> = when (f) {

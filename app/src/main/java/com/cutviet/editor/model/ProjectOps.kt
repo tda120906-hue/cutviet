@@ -217,11 +217,14 @@ object ProjectOps {
         return rows
     }
 
-    /** Output canvas size at original quality: keeps the long side of the first clip. */
+    /**
+     * Output canvas size at original quality: keeps the long side of the first clip. With the
+     * original ratio ("Gốc") the frame takes the shape of that clip after cropping.
+     */
     fun canvasSize(p: Project): Pair<Int, Int> {
         val base = p.clips.firstOrNull { !it.isImage } ?: p.clips.firstOrNull()
-        var w = base?.rotatedWidth?.takeIf { it > 0 } ?: 1080
-        var h = base?.rotatedHeight?.takeIf { it > 0 } ?: 1920
+        var w = base?.takeIf { it.width > 0 && it.height > 0 }?.croppedWidth ?: 1080
+        var h = base?.takeIf { it.width > 0 && it.height > 0 }?.croppedHeight ?: 1920
         val ratio = p.aspect.value
         if (ratio != null) {
             val longSide = max(w, h)

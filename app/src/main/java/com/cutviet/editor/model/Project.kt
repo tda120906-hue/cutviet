@@ -42,16 +42,35 @@ data class Adjustments(
 }
 
 /**
- * Crop window inside the (rotated) frame. [aspect] null keeps the frame's own aspect ratio.
- * [centerX]/[centerY] are 0..1 with the origin at the top-left corner.
+ * Crop window and fine rotation of a clip. The window is in the "turned" frame: the picture after
+ * its 90° rotation, flips and straightening, as the user sees it in the crop editor; 0..1 from the
+ * top-left corner.
  */
 data class CropSpec(
+    val left: Float = 0f,
+    val top: Float = 0f,
+    val right: Float = 1f,
+    val bottom: Float = 1f,
+    /** Width/height ratio (in pixels) the window is locked to in the editor; null = free. */
     val aspect: Float? = null,
-    val zoom: Float = 1f,
-    val centerX: Float = 0.5f,
-    val centerY: Float = 0.5f,
+    /**
+     * Fine rotation, clockwise degrees in -45..45. The picture is enlarged just enough that the
+     * frame stays filled (no empty corners).
+     */
+    val straighten: Float = 0f,
 ) {
-    val isIdentity: Boolean get() = aspect == null && zoom <= 1.001f
+    val width: Float get() = right - left
+    val height: Float get() = bottom - top
+
+    /** True when the window is the whole frame. */
+    val isFull: Boolean
+        get() = left <= EDGE && top <= EDGE && right >= 1f - EDGE && bottom >= 1f - EDGE
+
+    val isIdentity: Boolean get() = isFull && straighten == 0f
+
+    companion object {
+        private const val EDGE = 0.0005f
+    }
 }
 
 /** Text or sticker drawn on top of a clip. Size is a fraction of the output height; x/y are 0..1 from top-left. */
@@ -102,6 +121,10 @@ data class Clip(
 
     val rotatedWidth: Int get() = if (rotation % 180 == 0) width else height
     val rotatedHeight: Int get() = if (rotation % 180 == 0) height else width
+
+    /** Size of the picture after cropping, in source pixels. */
+    val croppedWidth: Int get() = maxOf(2, Math.round(rotatedWidth * crop.width))
+    val croppedHeight: Int get() = maxOf(2, Math.round(rotatedHeight * crop.height))
 
     /** Source position (ms) shown at [offsetMs] into this clip on the timeline. */
     fun sourceTimeAt(offsetMs: Long): Long =

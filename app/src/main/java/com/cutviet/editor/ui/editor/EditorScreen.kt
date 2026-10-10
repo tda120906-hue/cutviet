@@ -247,6 +247,9 @@ private fun EditorContent(vm: EditorViewModel, onBack: () -> Unit) {
         })
     }
     ExportProgress(vm)
+    vm.cropClipId?.let { id ->
+        vm.project.clips.firstOrNull { it.id == id }?.let { CropDialog(vm, it) }
+    }
     vm.eraserOverlayId?.let { id ->
         vm.project.overlays.firstOrNull { it.id == id }?.let { EraserDialog(vm, it) }
     }
@@ -324,7 +327,7 @@ private fun Toolbar(vm: EditorViewModel, onAddMedia: () -> Unit, onAddMusic: () 
             add(Tool("Điều chỉnh", Icons.Filled.Tune) { vm.openPanel(Panel.ADJUST) })
             add(Tool("Văn bản", Icons.Filled.Title) { vm.openPanel(Panel.TEXT) })
             add(Tool("Nhãn dán", Icons.Filled.EmojiEmotions) { vm.openPanel(Panel.STICKER) })
-            add(Tool("Cắt khung", Icons.Filled.Crop) { vm.openPanel(Panel.CROP) })
+            add(Tool("Cắt khung", Icons.Filled.Crop) { vm.openCrop() })
             add(Tool("Xoay/Lật", Icons.Filled.Flip) { vm.openPanel(Panel.TRANSFORM) })
             add(Tool("Nhân bản", Icons.Filled.ContentCopy) { vm.duplicateSelected() })
             add(Tool("Sang trái", Icons.Filled.ChevronLeft) { vm.moveSelected(-1) })

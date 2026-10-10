@@ -82,7 +82,7 @@ import com.cutviet.editor.model.MaskShape
 import com.cutviet.editor.model.ShapeMask
 import com.cutviet.editor.model.Adjustments
 import com.cutviet.editor.model.AspectRatio
-import com.cutviet.editor.model.CropSpec
+import com.cutviet.editor.model.CropOps
 import com.cutviet.editor.model.FilterPreset
 import com.cutviet.editor.model.ProjectOps
 import com.cutviet.editor.model.TextItem
@@ -117,7 +117,6 @@ fun PanelHost(vm: EditorViewModel, panel: Panel, modifier: Modifier = Modifier.h
                 Panel.SPEED -> SpeedPanel(vm)
                 Panel.VOLUME -> VolumePanel(vm)
                 Panel.TRANSFORM -> TransformPanel(vm)
-                Panel.CROP -> CropPanel(vm)
                 Panel.FILTER -> FilterPanel(vm)
                 Panel.ADJUST -> AdjustPanel(vm)
                 Panel.TEXT -> TextPanel(vm, stickers = false)
@@ -302,10 +301,11 @@ private fun VolumePanel(vm: EditorViewModel) {
 private fun TransformPanel(vm: EditorViewModel) {
     val clip = vm.selectedClip ?: return
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-        ToolCircle(Icons.Filled.RotateRight, "Xoay 90°") { vm.updateSelected { it.copy(rotation = (it.rotation + 90) % 360) } }
-        ToolCircle(Icons.Filled.SwapHoriz, "Lật ngang") { vm.updateSelected { it.copy(flipH = !it.flipH) } }
-        ToolCircle(Icons.Filled.SwapVert, "Lật dọc") { vm.updateSelected { it.copy(flipV = !it.flipV) } }
-        ToolCircle(Icons.Filled.Refresh, "Đặt lại") { vm.updateSelected { it.copy(rotation = 0, flipH = false, flipV = false) } }
+        // The crop window turns and mirrors with the picture.
+        ToolCircle(Icons.Filled.RotateRight, "Xoay 90°") { vm.updateSelected { CropOps.turn(it, clockwise = true) } }
+        ToolCircle(Icons.Filled.SwapHoriz, "Lật ngang") { vm.updateSelected { CropOps.mirror(it, horizontal = true) } }
+        ToolCircle(Icons.Filled.SwapVert, "Lật dọc") { vm.updateSelected { CropOps.mirror(it, horizontal = false) } }
+        ToolCircle(Icons.Filled.Refresh, "Đặt lại") { vm.updateSelected { CropOps.resetOrientation(it) } }
     }
     Text(
         "Góc xoay: ${clip.rotation}°" + (if (clip.flipH) " · lật ngang" else "") + (if (clip.flipV) " · lật dọc" else ""),
@@ -327,34 +327,6 @@ private fun ToolCircle(icon: androidx.compose.ui.graphics.vector.ImageVector, la
         }
         Text(label, color = Color.White, fontSize = 11.sp, modifier = Modifier.padding(top = 4.dp))
     }
-}
-
-// ---------- crop ----------
-
-@Composable
-private fun CropPanel(vm: EditorViewModel) {
-    val clip = vm.selectedClip ?: return
-    val crop = clip.crop
-    Text("Tỉ lệ vùng cắt", color = Color.White, fontSize = 13.sp)
-    Row(Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 4.dp)) {
-        val options = listOf<Pair<String, Float?>>(
-            "Tự do" to null, "1:1" to 1f, "9:16" to 9f / 16f, "16:9" to 16f / 9f,
-            "4:5" to 4f / 5f, "3:4" to 3f / 4f, "4:3" to 4f / 3f, "2.35:1" to 2.35f,
-        )
-        options.forEach { (label, a) ->
-            Chip(label, crop.aspect == a) { vm.updateSelected { it.copy(crop = it.crop.copy(aspect = a)) } }
-        }
-    }
-    LabeledSlider("Thu phóng", crop.zoom, 1f..4f, String.format(Locale.US, "%.2fx", crop.zoom)) { v ->
-        vm.updateSelected { it.copy(crop = it.crop.copy(zoom = v)) }
-    }
-    LabeledSlider("Ngang", crop.centerX, 0f..1f, pct(crop.centerX - 0.5f)) { v ->
-        vm.updateSelected { it.copy(crop = it.crop.copy(centerX = v)) }
-    }
-    LabeledSlider("Dọc", crop.centerY, 0f..1f, pct(crop.centerY - 0.5f)) { v ->
-        vm.updateSelected { it.copy(crop = it.crop.copy(centerY = v)) }
-    }
-    TextButton(onClick = { vm.updateSelected { it.copy(crop = CropSpec()) } }) { Text("Đặt lại vùng cắt", color = Accent) }
 }
 
 // ---------- filters ----------
