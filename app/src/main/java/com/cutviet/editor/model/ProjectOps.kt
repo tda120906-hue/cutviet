@@ -222,11 +222,13 @@ object ProjectOps {
      * original ratio ("Gốc") the frame takes the shape of that clip after cropping.
      */
     fun canvasSize(p: Project): Pair<Int, Int> {
-        val base = p.clips.firstOrNull { !it.isImage } ?: p.clips.firstOrNull()
-        var w = base?.takeIf { it.width > 0 && it.height > 0 }?.croppedWidth ?: 1080
-        var h = base?.takeIf { it.width > 0 && it.height > 0 }?.croppedHeight ?: 1920
+        val base = (p.clips.firstOrNull { !it.isImage } ?: p.clips.firstOrNull())?.takeIf { it.width > 0 && it.height > 0 }
+        var w = base?.rotatedWidth ?: 1080
+        var h = base?.rotatedHeight ?: 1920
         val ratio = p.aspect.value
+            ?: base?.takeIf { !it.crop.isFull }?.let { it.croppedWidth.toFloat() / it.croppedHeight }
         if (ratio != null) {
+            // The long side stays the same so cropping or changing the ratio never lowers quality.
             val longSide = max(w, h)
             if (ratio >= 1f) {
                 w = longSide; h = (longSide / ratio).roundToInt()

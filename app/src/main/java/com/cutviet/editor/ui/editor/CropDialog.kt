@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AspectRatio
@@ -39,6 +40,7 @@ import androidx.compose.material.icons.filled.Flip
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Rotate90DegreesCcw
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -73,6 +75,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -103,6 +106,7 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.sign
 
 private val PillColor = Color(0xFF1F2230)
 private val DialTick = Color(0xFFB8BCCB)
@@ -182,10 +186,26 @@ fun CropDialog(vm: EditorViewModel, clip: Clip) {
         }
     }
 
+    var askDiscard by remember { mutableStateOf(false) }
     Dialog(
-        onDismissRequest = { vm.closeCrop() },
+        // Back (often an accidental edge swipe) asks before throwing the changes away.
+        onDismissRequest = { if (changed) askDiscard = true else vm.closeCrop() },
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
+        if (askDiscard) {
+            AlertDialog(
+                onDismissRequest = { askDiscard = false },
+                title = { Text("Bỏ thay đổi?") },
+                text = { Text("Vùng cắt, góc xoay và lật vừa chỉnh sẽ không được lưu.") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        askDiscard = false
+                        vm.closeCrop()
+                    }) { Text("Bỏ thay đổi") }
+                },
+                dismissButton = { TextButton(onClick = { askDiscard = false }) { Text("Tiếp tục sửa") } },
+            )
+        }
         Column(Modifier.fillMaxSize().background(Color.Black).safeDrawingPadding()) {
             Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Cắt khung", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp, modifier = Modifier.weight(1f))
@@ -213,8 +233,11 @@ fun CropDialog(vm: EditorViewModel, clip: Clip) {
                 },
                 controls = {
                     if (player != null) {
-                        Box(Modifier.fillMaxWidth().align(Alignment.BottomCenter).padding(bottom = 12.dp)) {
-                            IconButton(onClick = { togglePlay() }, modifier = Modifier.align(Alignment.CenterStart).padding(start = 8.dp)) {
+                        Row(
+                            Modifier.align(Alignment.BottomStart).padding(start = 12.dp, bottom = 12.dp, end = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            IconButton(onClick = { togglePlay() }) {
                                 Icon(
                                     if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                                     if (playing) "Tạm dừng" else "Phát",
@@ -223,9 +246,9 @@ fun CropDialog(vm: EditorViewModel, clip: Clip) {
                             }
                             Text(
                                 "${clock((position / clip.speed).toLong())} / ${clock(clip.durationMs)}",
-                                color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium,
+                                color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1,
                                 style = TextStyle(shadow = Shadow(Color.Black, Offset(0f, 1f), 4f)),
-                                modifier = Modifier.align(Alignment.Center),
+                                modifier = Modifier.padding(start = 4.dp),
                             )
                         }
                     }
@@ -239,13 +262,18 @@ fun CropDialog(vm: EditorViewModel, clip: Clip) {
                     onStart = {
                         resume = player.isPlaying
                         player.pause()
+                        // Fast, approximate frames while the finger moves.
+                        player.setScrubbingModeEnabled(true)
                     },
                     onSeek = { f ->
                         val t = (f * trimmed).toLong().coerceIn(0, trimmed - 1)
                         position = t
                         player.seekTo(t)
                     },
-                    onEnd = { if (resume) player.play() },
+                    onEnd = {
+                        player.setScrubbingModeEnabled(false)
+                        if (resume) player.play()
+                    },
                 )
             } else {
                 Spacer(Modifier.height(12.dp))
@@ -311,72 +339,86 @@ private fun CropStage(
     controls: @Composable androidx.compose.foundation.layout.BoxScope.() -> Unit,
 ) {
     val density = LocalDensity.current
-    BoxWithConstraints(modifier.padding(horizontal = 28.dp, vertical = 20.dp)) {
-        val areaW = constraints.maxWidth.toFloat()
-        val areaH = constraints.maxHeight.toFloat()
+    BoxWithConstraints(modifier) {
+        // The margin around the picture belongs to the touch area too, so the brackets drawn there
+        // can be grabbed. It is wide enough to keep the side brackets away from the back gesture.
+        val padX = with(density) { 40.dp.toPx() }
+        val padY = with(density) { 20.dp.toPx() }
+        val areaW = (constraints.maxWidth - 2 * padX).coerceAtLeast(1f)
+        val areaH = (constraints.maxHeight - 2 * padY).coerceAtLeast(1f)
         val frameAspect = clip.rotatedWidth.toFloat().coerceAtLeast(1f) / clip.rotatedHeight.toFloat().coerceAtLeast(1f)
         val fw = min(areaW, areaH * frameAspect)
         val fh = fw / frameAspect
-        val fl = (areaW - fw) / 2
-        val ft = (areaH - fh) / 2
+        val fl = padX + (areaW - fw) / 2
+        val ft = padY + (areaH - fh) / 2
         val frameOffset = IntOffset(fl.roundToInt(), ft.roundToInt())
         val frameW = with(density) { fw.toDp() }
         val frameH = with(density) { fh.toDp() }
 
-        // The picture, turned, mirrored and straightened like the export.
-        Box(Modifier.offset { frameOffset }.size(frameW, frameH).clipToBounds(), contentAlignment = Alignment.Center) {
-            val sideways = clip.rotation % 180 != 0
-            val k = CropOps.straightenScale(clip.crop.straighten, frameAspect)
-            Box(
-                Modifier
-                    .requiredSize(if (sideways) frameH else frameW, if (sideways) frameW else frameH)
-                    .graphicsLayer {
-                        rotationZ = clip.rotation + clip.crop.straighten
-                        scaleX = k * (if (clip.flipH) -1f else 1f)
-                        scaleY = k * (if (clip.flipV) -1f else 1f)
-                    },
-            ) { picture() }
-        }
-
         var dragging by remember { mutableStateOf(false) }
         val crop by rememberUpdatedState(clip.crop)
         val onCrop by rememberUpdatedState(onCropChange)
-        Canvas(
-            Modifier.fillMaxSize().pointerInput(fl, ft, fw, fh, frameAspect) {
-                val cornerReach = 36.dp.toPx()
-                val edgeReach = 26.dp.toPx()
-                val minPx = 56.dp.toPx()
-                awaitEachGesture {
-                    val down = awaitFirstDown()
-                    val start = crop
-                    val handle = hitHandle(windowRect(start, fl, ft, fw, fh), down.position, cornerReach, edgeReach)
-                        ?: return@awaitEachGesture
-                    down.consume()
-                    var moved = false
-                    try {
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                            if (!change.pressed) break
-                            val d = change.position - down.position
-                            if (!moved && d.getDistance() < viewConfiguration.touchSlop) continue
-                            if (!moved) {
-                                moved = true
-                                dragging = true
+        Box(
+            Modifier.fillMaxSize()
+                // Keep the system back gesture from stealing drags of the side handles.
+                .systemGestureExclusion { c -> Rect(0f, 0f, padX, c.size.height.toFloat()) }
+                .systemGestureExclusion { c -> Rect(c.size.width - padX, 0f, c.size.width.toFloat(), c.size.height.toFloat()) }
+                .pointerInput(fl, ft, fw, fh, frameAspect) {
+                    val cornerReach = 36.dp.toPx()
+                    val edgeReach = 26.dp.toPx()
+                    val minPx = 56.dp.toPx()
+                    awaitEachGesture {
+                        // Looked at before the play button, so grabbing a corner or edge always wins;
+                        // a plain tap inside the window still reaches the button.
+                        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                        val start = crop
+                        val handle = hitHandle(windowRect(start, fl, ft, fw, fh), down.position, cornerReach, edgeReach)
+                            ?: return@awaitEachGesture
+                        val grabbed = handle != CropHandle.MOVE
+                        if (grabbed) down.consume()
+                        var moved = false
+                        try {
+                            while (true) {
+                                val event = awaitPointerEvent(PointerEventPass.Initial)
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                if (!change.pressed) break
+                                val d = change.position - down.position
+                                if (!moved && d.getDistance() < viewConfiguration.touchSlop) {
+                                    if (grabbed) change.consume()
+                                    continue
+                                }
+                                if (!moved) {
+                                    moved = true
+                                    dragging = true
+                                }
+                                change.consume()
+                                onCrop(CropOps.drag(start, handle, d.x / fw, d.y / fh, frameAspect, minPx / fw, minPx / fh))
                             }
-                            change.consume()
-                            onCrop(CropOps.drag(start, handle, d.x / fw, d.y / fh, frameAspect, minPx / fw, minPx / fh))
+                        } finally {
+                            dragging = false
                         }
-                    } finally {
-                        dragging = false
                     }
-                }
-            },
+                },
         ) {
-            drawWindow(windowRect(clip.crop, fl, ft, fw, fh), Rect(fl, ft, fl + fw, ft + fh), dragging)
+            // The picture, turned, mirrored and straightened like the export.
+            Box(Modifier.offset { frameOffset }.size(frameW, frameH).clipToBounds(), contentAlignment = Alignment.Center) {
+                val sideways = clip.rotation % 180 != 0
+                val k = CropOps.straightenScale(clip.crop.straighten, frameAspect)
+                Box(
+                    Modifier
+                        .requiredSize(if (sideways) frameH else frameW, if (sideways) frameW else frameH)
+                        .graphicsLayer {
+                            rotationZ = clip.rotation + clip.crop.straighten
+                            scaleX = k * (if (clip.flipH) -1f else 1f)
+                            scaleY = k * (if (clip.flipV) -1f else 1f)
+                        },
+                ) { picture() }
+            }
+            Canvas(Modifier.fillMaxSize()) {
+                drawWindow(windowRect(clip.crop, fl, ft, fw, fh), Rect(fl, ft, fl + fw, ft + fh), dragging)
+            }
+            Box(Modifier.offset { frameOffset }.size(frameW, frameH)) { controls() }
         }
-
-        Box(Modifier.offset { frameOffset }.size(frameW, frameH)) { controls() }
     }
 }
 
@@ -385,9 +427,11 @@ private fun windowRect(c: CropSpec, fl: Float, ft: Float, fw: Float, fh: Float) 
 
 /** Which part of the window a finger at [p] grabs, or null if none. */
 private fun hitHandle(r: Rect, p: Offset, cornerReach: Float, edgeReach: Float): CropHandle? {
-    // Shrink the grab zones on a small window so its middle can still be moved.
-    val corner = min(cornerReach, min(r.width, r.height) * 0.4f)
-    val edge = min(edgeReach, min(r.width, r.height) * 0.2f)
+    // Inside a small window the grab zones shrink so its middle can still be moved; outside it
+    // they keep their full reach so the brackets are always easy to catch.
+    val inside = r.contains(p)
+    val corner = if (inside) min(cornerReach, min(r.width, r.height) * 0.4f) else cornerReach
+    val edge = if (inside) min(edgeReach, min(r.width, r.height) * 0.2f) else edgeReach
     val corners = listOf(
         CropHandle.TOP_LEFT to r.topLeft, CropHandle.TOP_RIGHT to r.topRight,
         CropHandle.BOTTOM_LEFT to r.bottomLeft, CropHandle.BOTTOM_RIGHT to r.bottomRight,
@@ -400,7 +444,7 @@ private fun hitHandle(r: Rect, p: Offset, cornerReach: Float, edgeReach: Float):
     if (withinY && abs(p.x - r.right) <= edge) return CropHandle.RIGHT
     if (withinX && abs(p.y - r.top) <= edge) return CropHandle.TOP
     if (withinX && abs(p.y - r.bottom) <= edge) return CropHandle.BOTTOM
-    if (r.contains(p)) return CropHandle.MOVE
+    if (inside) return CropHandle.MOVE
     return null
 }
 
@@ -524,13 +568,13 @@ private fun StraightenDial(angle: Float, onChange: (Float) -> Unit, modifier: Mo
                 var value = 0f
                 detectHorizontalDragGestures(
                     onDragStart = { value = current },
-                    onDragEnd = { if (abs(current) < 0.5f) change(0f) },
+                    onDragEnd = { if (abs(value) < 0.5f) change(0f) },
                 ) { c, dx ->
                     c.consume()
                     val before = value
                     value = CropOps.clampStraighten(value - dx / perDegree)
                     // A tick when passing level.
-                    if ((before < 0f) != (value < 0f) || value == 0f && before != 0f) {
+                    if (before != 0f && (value == 0f || sign(before) != sign(value))) {
                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                     }
                     change((value * 10).roundToInt() / 10f)

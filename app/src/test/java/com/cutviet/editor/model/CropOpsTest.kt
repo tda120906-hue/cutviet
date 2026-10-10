@@ -148,9 +148,13 @@ class CropOpsTest {
     }
 
     @Test
-    fun canvasFollowsTheFirstClipsCrop() {
+    fun canvasFollowsTheFirstClipsCropWithoutLosingQuality() {
         val c = clip().copy(crop = CropSpec(0f, 0f, 0.5f, 1f))
-        val p = Project(name = "t", clips = listOf(c))
-        assertEquals(960 to 1080, ProjectOps.canvasSize(p))
+        // "Gốc": the cropped shape, at the clip's full long side.
+        assertEquals(1706 to 1920, ProjectOps.canvasSize(Project(name = "t", clips = listOf(c))))
+        // A chosen ratio ignores the crop and keeps the long side.
+        assertEquals(1080 to 1920, ProjectOps.canvasSize(Project(name = "t", clips = listOf(c), aspect = AspectRatio.R9_16)))
+        // Uncropped: exactly the clip.
+        assertEquals(1920 to 1080, ProjectOps.canvasSize(Project(name = "t", clips = listOf(clip()))))
     }
 }

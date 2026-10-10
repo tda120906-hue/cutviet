@@ -23,7 +23,8 @@ Xuất video giữ nguyên độ phân giải, khung hình/giây và bitrate tư
 - Mặt nạ lớp phủ: tròn, chữ nhật bo góc, trái tim, ngôi sao, đường thẳng, dải gương; làm mềm viền, xoay, đảo ngược
 - Giọng đọc AI tiếng Việt từ văn bản (dùng giọng tiếng Việt có trên điện thoại): nhiều giọng, mẫu giọng, tốc độ 0.5x–3x,
   ước tính thời lượng ngay khi gõ và đo chính xác sau đó, hiện đoạn video mà giọng đọc sẽ phủ lên
-- Xoay 90°, lật ngang/dọc, cắt khung theo tỉ lệ, thu phóng và di chuyển vùng cắt
+- Cắt khung toàn màn hình: kéo góc/cạnh khung cắt, kéo bên trong để di chuyển, chỉnh nghiêng bằng thước xoay (-45° đến 45°), phản chiếu, xoay 90°, chọn tỉ lệ (tự do, gốc, vuông, 9:16, 16:9, 4:5, 3:4, 21:9...); xem/tua video ngay trong màn hình cắt
+- Xoay 90°, lật ngang/dọc (khung cắt xoay theo hình)
 - Tỉ lệ khung hình dự án: Gốc, 9:16, 16:9, 1:1, 4:5, 3:4, 4:3, 21:9; vừa khung hoặc lấp đầy
 - 11 bộ lọc màu; điều chỉnh độ sáng, tương phản, bão hòa, nhiệt độ màu, sắc độ; áp dụng cho tất cả các đoạn
 - Văn bản (màu, cỡ, đậm, nền, vị trí) và nhãn dán emoji

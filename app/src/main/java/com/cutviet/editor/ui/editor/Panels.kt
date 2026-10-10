@@ -307,8 +307,12 @@ private fun TransformPanel(vm: EditorViewModel) {
         ToolCircle(Icons.Filled.SwapVert, "Lật dọc") { vm.updateSelected { CropOps.mirror(it, horizontal = false) } }
         ToolCircle(Icons.Filled.Refresh, "Đặt lại") { vm.updateSelected { CropOps.resetOrientation(it) } }
     }
+    // Flips are stored on the source picture; name them as they look after turning.
+    val sideways = clip.rotation % 180 != 0
+    val mirroredH = if (sideways) clip.flipV else clip.flipH
+    val mirroredV = if (sideways) clip.flipH else clip.flipV
     Text(
-        "Góc xoay: ${clip.rotation}°" + (if (clip.flipH) " · lật ngang" else "") + (if (clip.flipV) " · lật dọc" else ""),
+        "Góc xoay: ${clip.rotation}°" + (if (mirroredH) " · lật ngang" else "") + (if (mirroredV) " · lật dọc" else ""),
         color = TextDim, fontSize = 12.sp, modifier = Modifier.padding(vertical = 8.dp),
     )
     Text("Vị trí trong khung hình", color = Color.White, fontSize = 13.sp)
@@ -521,7 +525,7 @@ private fun CanvasPanel(vm: EditorViewModel) {
     val (w, h) = ProjectOps.canvasSize(p)
     Text("Kích thước khung hình: $w × $h", color = Color.White, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
     Text(
-        "\"Gốc\" dùng đúng kích thước của video đầu tiên. Với tỉ lệ khác, cạnh dài được giữ nguyên để không giảm chất lượng.",
+        "\"Gốc\" theo khung của video đầu tiên (kể cả khi đã cắt khung). Cạnh dài luôn được giữ nguyên để không giảm chất lượng.",
         color = TextDim, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp),
     )
     Text("Đoạn không khớp tỉ lệ:", color = Color.White, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp))
