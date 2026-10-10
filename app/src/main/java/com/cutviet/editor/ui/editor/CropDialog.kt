@@ -344,7 +344,8 @@ private fun CropStage(
         // can be grabbed. It is wide enough to keep the side brackets away from the back gesture.
         val padX = with(density) { 40.dp.toPx() }
         val padY = with(density) { 20.dp.toPx() }
-        val areaW = (constraints.maxWidth - 2 * padX).coerceAtLeast(1f)
+        val stageW = constraints.maxWidth.toFloat()
+        val areaW = (stageW - 2 * padX).coerceAtLeast(1f)
         val areaH = (constraints.maxHeight - 2 * padY).coerceAtLeast(1f)
         val frameAspect = clip.rotatedWidth.toFloat().coerceAtLeast(1f) / clip.rotatedHeight.toFloat().coerceAtLeast(1f)
         val fw = min(areaW, areaH * frameAspect)
@@ -415,7 +416,6 @@ private fun CropStage(
             // handles are covered: Android honours at most 200dp per screen edge.
             val win = windowRect(clip.crop, fl, ft, fw, fh)
             val stripW = with(density) { padX.toDp() }
-            val stageW = constraints.maxWidth.toFloat()
             for (y in listOf(win.top, win.center.y, win.bottom)) {
                 val h = if (y == win.center.y) 48.dp else 64.dp
                 val top = y - with(density) { h.toPx() } / 2
