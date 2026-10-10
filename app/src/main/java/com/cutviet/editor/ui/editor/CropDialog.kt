@@ -360,22 +360,17 @@ private fun CropStage(
         val onCrop by rememberUpdatedState(onCropChange)
         Box(
             Modifier.fillMaxSize()
-                // Keep the system back gesture from stealing drags of the side handles.
-                .systemGestureExclusion { c -> Rect(0f, 0f, padX, c.size.height.toFloat()) }
-                .systemGestureExclusion { c -> Rect(c.size.width - padX, 0f, c.size.width.toFloat(), c.size.height.toFloat()) }
                 .pointerInput(fl, ft, fw, fh, frameAspect) {
                     val cornerReach = 36.dp.toPx()
                     val edgeReach = 26.dp.toPx()
                     val minPx = 56.dp.toPx()
                     awaitEachGesture {
-                        // Looked at before the play button, so grabbing a corner or edge always wins;
-                        // a plain tap inside the window still reaches the button.
+                        // Looked at before the play button: once a finger drags a corner, edge or the
+                        // window, the drag is taken (and the button cancelled); a still tap reaches it.
                         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                         val start = crop
                         val handle = hitHandle(windowRect(start, fl, ft, fw, fh), down.position, cornerReach, edgeReach)
                             ?: return@awaitEachGesture
-                        val grabbed = handle != CropHandle.MOVE
-                        if (grabbed) down.consume()
                         var moved = false
                         try {
                             while (true) {
@@ -383,10 +378,7 @@ private fun CropStage(
                                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
                                 if (!change.pressed) break
                                 val d = change.position - down.position
-                                if (!moved && d.getDistance() < viewConfiguration.touchSlop) {
-                                    if (grabbed) change.consume()
-                                    continue
-                                }
+                                if (!moved && d.getDistance() < viewConfiguration.touchSlop) continue
                                 if (!moved) {
                                     moved = true
                                     dragging = true
@@ -418,6 +410,23 @@ private fun CropStage(
                 drawWindow(windowRect(clip.crop, fl, ft, fw, fh), Rect(fl, ft, fl + fw, ft + fh), dragging)
             }
             Box(Modifier.offset { frameOffset }.size(frameW, frameH)) { controls() }
+
+            // Keep the system back gesture from stealing drags of the side handles. Only the
+            // handles are covered: Android honours at most 200dp per screen edge.
+            val win = windowRect(clip.crop, fl, ft, fw, fh)
+            val stripW = with(density) { padX.toDp() }
+            val stageW = constraints.maxWidth.toFloat()
+            for (y in listOf(win.top, win.center.y, win.bottom)) {
+                val h = if (y == win.center.y) 48.dp else 64.dp
+                val top = y - with(density) { h.toPx() } / 2
+                for (x in listOf(0f, stageW - padX)) {
+                    Box(
+                        Modifier.offset { IntOffset(x.roundToInt(), top.roundToInt()) }
+                            .size(stripW, h)
+                            .systemGestureExclusion(),
+                    )
+                }
+            }
         }
     }
 }

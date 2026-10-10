@@ -157,4 +157,19 @@ class CropOpsTest {
         // Uncropped: exactly the clip.
         assertEquals(1920 to 1080, ProjectOps.canvasSize(Project(name = "t", clips = listOf(clip()))))
     }
+
+    @Test
+    fun canvasShapeIsExactForLockedAndZoomCrops() {
+        val frame = 16f / 9f
+        // A 9:16 window shrunk a little by its corner is still exactly 9:16.
+        val tall = CropOps.drag(CropOps.withAspect(CropSpec(), 9f / 16f, frame), CropHandle.BOTTOM_RIGHT, -0.013f, -0.021f, frame, 0.05f, 0.05f)
+        assertEquals(1080 to 1920, ProjectOps.canvasSize(Project(name = "t", clips = listOf(clip().copy(crop = tall)))))
+        val square = CropOps.drag(CropOps.withAspect(CropSpec(), 1f, frame), CropHandle.TOP_LEFT, 0.0137f, 0.009f, frame, 0.05f, 0.05f)
+        assertEquals(1920 to 1920, ProjectOps.canvasSize(Project(name = "t", clips = listOf(clip().copy(crop = square)))))
+        // An old zoom-only crop keeps the frame's shape.
+        for (zoom in listOf(1.13f, 1.27f, 1.5f, 2.37f)) {
+            val legacy = CropOps.fromLegacy(null, zoom, 0.5f, 0.5f, 1920, 1080)
+            assertEquals("$zoom", 1920 to 1080, ProjectOps.canvasSize(Project(name = "t", clips = listOf(clip().copy(crop = legacy)))))
+        }
+    }
 }

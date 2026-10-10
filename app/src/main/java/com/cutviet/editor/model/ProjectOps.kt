@@ -225,19 +225,24 @@ object ProjectOps {
         val base = (p.clips.firstOrNull { !it.isImage } ?: p.clips.firstOrNull())?.takeIf { it.width > 0 && it.height > 0 }
         var w = base?.rotatedWidth ?: 1080
         var h = base?.rotatedHeight ?: 1920
+        // The crop's shape from the window itself (pixel counts are rounded and would skew it).
         val ratio = p.aspect.value
-            ?: base?.takeIf { !it.crop.isFull }?.let { it.croppedWidth.toFloat() / it.croppedHeight }
+            ?: base?.takeIf { !it.crop.isFull }?.let { b ->
+                b.crop.aspect ?: (b.rotatedWidth * b.crop.width) / (b.rotatedHeight * b.crop.height).coerceAtLeast(1e-3f)
+            }
         if (ratio != null) {
             // The long side stays the same so cropping or changing the ratio never lowers quality.
             val longSide = max(w, h)
             if (ratio >= 1f) {
-                w = longSide; h = (longSide / ratio).roundToInt()
+                w = longSide; h = nearestEven(longSide / ratio)
             } else {
-                h = longSide; w = (longSide * ratio).roundToInt()
+                h = longSide; w = nearestEven(longSide * ratio)
             }
         }
         return even(w) to even(h)
     }
+
+    private fun nearestEven(v: Float): Int = max(2, (v / 2f).roundToInt() * 2)
 
     /** Scales [size] down so that its short side is at most [shortSide] (never up). */
     fun scaleToShortSide(size: Pair<Int, Int>, shortSide: Int?): Pair<Int, Int> {
