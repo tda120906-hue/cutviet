@@ -19,37 +19,55 @@ import java.io.File
  */
 class GemmaTranslator(private val context: Context, private val model: File) : TextTranslator {
     private var backend = "?"
+    /** Kept loaded after [translate] for [shorten]; loading takes over a minute. */
+    private var llm: LlmInference? = null
 
-    override suspend fun translate(segments: List<SpeechSegment>, language: SourceLanguage, progress: (Float) -> Unit): List<String> =
+    override suspend fun translate(segments: List<SpeechSegment>, language: SourceLanguage, budgets: List<Int>, progress: (Float) -> Unit): List<String> =
         withContext(Dispatchers.IO) {
             if (!model.exists()) throw StepUnavailableException("Chưa có model dịch Gemma")
-            val t0 = SystemClock.elapsedRealtime()
-            val llm = open()
-            DubLog.i(TAG, "model load ${SystemClock.elapsedRealtime() - t0} ms on $backend")
-            try {
-                val out = ArrayList<String>(segments.size)
-                var i = 0
-                while (i < segments.size) {
-                    coroutineContext.ensureActive()
-                    val lines = segments.subList(i, minOf(segments.size, i + TranslationPrompt.WINDOW))
-                    val ctx = segments.subList(maxOf(0, i - TranslationPrompt.CONTEXT), i)
-                    val tw = SystemClock.elapsedRealtime()
-                    val parsed = TranslationPrompt.parse(ask(llm, TranslationPrompt.build(language, ctx, lines)), lines.size)
-                    DubLog.i(TAG, "lines ${i + 1}-${i + lines.size}: ${SystemClock.elapsedRealtime() - tw} ms, read ${parsed?.count { it != null } ?: 0}/${lines.size}")
-                    lines.forEachIndexed { k, s ->
-                        val text = parsed?.getOrNull(k)
-                            ?: TranslationPrompt.parse(ask(llm, TranslationPrompt.build(language, ctx, listOf(s))), 1)?.firstOrNull()
-                            ?: s.text
-                        out += text
-                    }
-                    i += lines.size
-                    progress(i.toFloat() / segments.size)
+            val llm = engine()
+            val out = ArrayList<String>(segments.size)
+            var i = 0
+            while (i < segments.size) {
+                coroutineContext.ensureActive()
+                val end = minOf(segments.size, i + TranslationPrompt.WINDOW)
+                val lines = segments.subList(i, end)
+                val limits = budgets.subList(i, end)
+                val ctx = segments.subList(maxOf(0, i - TranslationPrompt.CONTEXT), i)
+                val tw = SystemClock.elapsedRealtime()
+                val parsed = TranslationPrompt.parse(ask(llm, TranslationPrompt.build(language, ctx, lines, limits)), lines.size)
+                DubLog.i(TAG, "lines ${i + 1}-$end: ${SystemClock.elapsedRealtime() - tw} ms, read ${parsed?.count { it != null } ?: 0}/${lines.size}")
+                lines.forEachIndexed { k, s ->
+                    val text = parsed?.getOrNull(k)
+                        ?: TranslationPrompt.parse(ask(llm, TranslationPrompt.build(language, ctx, listOf(s), listOf(limits[k]))), 1)?.firstOrNull()
+                        ?: s.text
+                    out += text
                 }
-                out
-            } finally {
-                llm.close()
+                i = end
+                progress(i.toFloat() / segments.size)
             }
+            out
         }
+
+    override suspend fun shorten(source: String, text: String, language: SourceLanguage, maxSyllables: Int): String? =
+        withContext(Dispatchers.IO) {
+            val llm = llm ?: return@withContext null
+            val answer = runCatching { ask(llm, TranslationPrompt.shorten(language, source, text, maxSyllables)) }.getOrNull()
+            answer?.let { TranslationPrompt.parse(it, 1)?.firstOrNull() }
+        }
+
+    override fun close() {
+        llm?.close()
+        llm = null
+    }
+
+    private fun engine(): LlmInference = llm ?: run {
+        val t0 = SystemClock.elapsedRealtime()
+        open().also {
+            DubLog.i(TAG, "model load ${SystemClock.elapsedRealtime() - t0} ms on $backend")
+            llm = it
+        }
+    }
 
     private fun open(): LlmInference {
         fun build(backend: LlmInference.Backend) = LlmInference.createFromOptions(

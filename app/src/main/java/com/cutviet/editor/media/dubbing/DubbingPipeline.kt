@@ -73,18 +73,26 @@ class DubbingPipeline(
         DubLog.i(TAG, "recognized ${segments.size} sentences")
         if (segments.isEmpty()) return Output(emptyList(), stems, 1f, false, fallback)
 
-        val texts = timed(Step.TRANSLATE, progress) {
-            translator.translate(segments, settings.language) { progress(Step.TRANSLATE, it) }
-        }
-        require(texts.size == segments.size) { "translator returned ${texts.size} of ${segments.size} lines" }
-
-        val dubbed = timed(Step.SPEAK, progress) {
-            val out = ArrayList<DubbedSegment>()
-            segments.forEachIndexed { i, seg ->
-                progress(Step.SPEAK, i.toFloat() / segments.size)
-                speak(i, seg, texts[i].trim(), settings)?.let(out::add)
+        // Each line may use the silence after its sentence; the translation is asked to fit that
+        // time at this voice's real speed.
+        val room = roomFor(segments.map { it.startMs to it.slotMs }, endMs)
+        val speed = voiceSpeed(settings)
+        val budgets = segments.indices.map { TranslationPrompt.syllableBudget(room[it], speed) }
+        val dubbed = try {
+            val texts = timed(Step.TRANSLATE, progress) {
+                translator.translate(segments, settings.language, budgets) { progress(Step.TRANSLATE, it) }
             }
-            out
+            require(texts.size == segments.size) { "translator returned ${texts.size} of ${segments.size} lines" }
+            timed(Step.SPEAK, progress) {
+                val out = ArrayList<DubbedSegment>()
+                segments.forEachIndexed { i, seg ->
+                    progress(Step.SPEAK, i.toFloat() / segments.size)
+                    speak(i, seg, texts[i].trim(), room[i], settings)?.let(out::add)
+                }
+                out
+            }
+        } finally {
+            translator.close()
         }
         val gain = timed(Step.MERGE, progress) {
             Loudness.gainTo(TARGET_LUFS, dubbed.map { it.file })
@@ -115,21 +123,59 @@ class DubbingPipeline(
         return FloatArray(fb.remaining()).also { fb.get(it) }
     }
 
-    private suspend fun speak(index: Int, seg: SpeechSegment, text: String, s: Settings): DubbedSegment? {
+    /** Speaks one line into its time; a line still too long at 1.15x is reworded shorter once. */
+    private suspend fun speak(index: Int, seg: SpeechSegment, text: String, roomMs: Long, s: Settings): DubbedSegment? {
         if (text.isEmpty()) return null
         // One sentence is far below the engine's input limit; cut defensively anyway.
-        val line = text.take(voice.maxInputLength)
-        var lastFile: File? = null
+        var line = text.take(voice.maxInputLength)
+        var best = render(index, 0, line, seg.slotMs, roomMs, s) ?: return null
+        val limit = AudioFitter.upper(seg.slotMs, roomMs)
+        if (best.fit.durationMs > limit) {
+            val syllables = VoiceEngine.syllableCount(line)
+            val target = (syllables * limit.toDouble() / best.fit.durationMs * 0.9).toInt().coerceAtLeast(1)
+            val shorter = translator.shorten(seg.text, line, s.language, target)?.take(voice.maxInputLength)
+            if (shorter != null && VoiceEngine.syllableCount(shorter) < syllables) {
+                val again = render(index, 1, shorter, seg.slotMs, roomMs, s)
+                DubLog.i(TAG, "segment $index reworded $syllables→${VoiceEngine.syllableCount(shorter)} syllables: ${again?.fit?.durationMs} ms")
+                if (again != null && AudioFitter.miss(again.fit.durationMs, seg.slotMs, roomMs) < AudioFitter.miss(best.fit.durationMs, seg.slotMs, roomMs)) {
+                    best.file.delete()
+                    best = again
+                    line = shorter
+                } else {
+                    again?.file?.delete()
+                }
+            }
+        }
+        val fit = best.fit
+        DubLog.i(TAG, "segment $index rate=${fit.rate} measured=${fit.durationMs}ms slot=${seg.slotMs}ms room=${roomMs}ms attempts=${fit.attempts}")
+        if (!fit.withinTolerance) DubLog.w(TAG, "segment $index misses its time by ${AudioFitter.miss(fit.durationMs, seg.slotMs, roomMs)} ms at rate ${fit.rate}")
+        return DubbedSegment(seg.startMs, seg.slotMs, seg.text, line, best.file, fit.durationMs, fit.rate)
+    }
+
+    private class Rendered(val file: File, val fit: AudioFitter.Fit)
+
+    /** Closed-loop synthesis of [line]; the engine's silence before and after is cut off. */
+    private suspend fun render(index: Int, take: Int, line: String, slotMs: Long, roomMs: Long, s: Settings): Rendered? {
         val files = HashMap<Float, File>()
-        val fit = AudioFitter.fit(voice.estimateMs(line, s.voiceName, 1f), seg.slotMs) { rate ->
-            val f = File(workDir, "seg_${index}_${(rate * 1000).toInt()}.wav")
-            voice.synthesize(line, s.voiceName, s.pitch, rate, f)?.also { files[rate] = f; lastFile = f }
+        val fit = AudioFitter.fit(voice.estimateMs(line, s.voiceName, 1f), slotMs, roomMs) { rate ->
+            val f = File(workDir, "seg_${index}_${take}_${(rate * 1000).toInt()}.wav")
+            voice.synthesize(line, s.voiceName, s.pitch, rate, f)?.let { ms -> WavTrim.trim(f) ?: ms }?.also { files[rate] = f }
         } ?: return null
-        val file = files[fit.rate] ?: lastFile ?: return null
+        val file = files[fit.rate] ?: return null
         files.values.filter { it != file }.forEach { it.delete() }
-        DubLog.i(TAG, "segment $index rate=${fit.rate} measured=${fit.durationMs}ms slot=${seg.slotMs}ms attempts=${fit.attempts}")
-        if (!fit.withinTolerance) DubLog.w(TAG, "segment $index off by ${fit.durationMs - seg.slotMs} ms at rate ${fit.rate}")
-        return DubbedSegment(seg.startMs, seg.slotMs, seg.text, line, file, fit.durationMs, fit.rate)
+        return Rendered(file, fit)
+    }
+
+    /** Syllables per second of the chosen voice at rate 1.0, measured on a test sentence. */
+    private suspend fun voiceSpeed(s: Settings): Double {
+        val f = File(workDir, "calibrate.wav")
+        val ms = voice.synthesize(CALIBRATION, s.voiceName, s.pitch, 1f, f)?.let { ms -> WavTrim.trim(f) ?: ms }
+        f.delete()
+        val seconds = (ms ?: 0) / 1000.0 - VoiceEngine.pauseSeconds(CALIBRATION)
+        val sps = if (seconds < 1.0) VoiceEngine.DEFAULT_SYLLABLES_PER_SECOND
+        else (VoiceEngine.syllableCount(CALIBRATION) / seconds).coerceIn(2.5, 7.0)
+        DubLog.i(TAG, "voice speed ${"%.2f".format(sps)} syllables/s (test sentence ${ms} ms)")
+        return sps
     }
 
     /** Runs one step: shows it right away (at 0%) and logs how long it took. */
@@ -148,6 +194,20 @@ class DubbingPipeline(
 
     companion object {
         const val TAG = "CutVietDub"
+        private const val CALIBRATION = "Xin chào các bạn, hôm nay chúng ta cùng nhau nói về một chuyện rất thú vị."
+        /** Kept free before the next line starts. */
+        const val GAP_MS = 80L
+        /** Furthest a line may run past its own sentence into the silence after it. */
+        const val MAX_SPILL_MS = 2_000L
+
+        /**
+         * Time each line ([start] to [slot] pairs, in order) may take: until the next line starts
+         * less [GAP_MS], at most [MAX_SPILL_MS] past its own slot, never less than the slot.
+         */
+        fun roomFor(lines: List<Pair<Long, Long>>, endMs: Long): List<Long> = lines.mapIndexed { i, (start, slot) ->
+            val next = lines.getOrNull(i + 1)?.first?.minus(GAP_MS) ?: if (endMs > start) endMs else start + slot + MAX_SPILL_MS
+            maxOf(slot, minOf(next - start, slot + MAX_SPILL_MS))
+        }
         /** Loudness of the Vietnamese voice (EBU R128 streaming level). */
         const val TARGET_LUFS = -16.0
     }

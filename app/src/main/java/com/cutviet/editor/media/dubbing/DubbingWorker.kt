@@ -290,7 +290,7 @@ object Engines {
         val model = DubModel.GEMMA_3N_E4B
         if (!model.isReady(context)) {
             return object : TextTranslator {
-                override suspend fun translate(segments: List<SpeechSegment>, language: SourceLanguage, progress: (Float) -> Unit) =
+                override suspend fun translate(segments: List<SpeechSegment>, language: SourceLanguage, budgets: List<Int>, progress: (Float) -> Unit) =
                     throw StepUnavailableException("Chưa tải model dịch (${model.label})")
             }
         }

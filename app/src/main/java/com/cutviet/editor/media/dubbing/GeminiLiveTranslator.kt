@@ -54,11 +54,12 @@ class GeminiLiveTranslator(
             throw OnlineUnavailableException("Gemini báo hết hạn mức (429, giả lập)")
         }
         if (apiKey.isBlank()) throw OnlineUnavailableException("Chưa nhập khoá Gemini")
+        val room = DubbingPipeline.roomFor(ranges.map { it.startMs to (it.endMs - it.startMs) }, voice.size / 16L)
         try {
             val out = ArrayList<DubbedSegment>()
             var next = 0
             while (next < ranges.size) {
-                next = session(voice, ranges, next, offsetMs, out) { done -> progress(done.toFloat() / ranges.size) }
+                next = session(voice, ranges, room, next, offsetMs, out) { done -> progress(done.toFloat() / ranges.size) }
             }
             return out
         } finally {
@@ -74,6 +75,7 @@ class GeminiLiveTranslator(
     private suspend fun session(
         voice: FloatArray,
         ranges: List<SpeechDetector.Range>,
+        room: List<Long>,
         from: Int,
         offsetMs: Long,
         out: MutableList<DubbedSegment>,
@@ -101,7 +103,7 @@ class GeminiLiveTranslator(
         })
         try {
             val t0 = SystemClock.elapsedRealtime()
-            ws.send(setup().toString())
+            ws.send(setupMessage(model).toString())
             val ready = withTimeoutOrNull(SETUP_TIMEOUT_MS) {
                 while (true) {
                     failure.tryReceive().getOrNull()?.let { throw OnlineUnavailableException(it) }
@@ -119,7 +121,7 @@ class GeminiLiveTranslator(
                 val r = ranges[i]
                 val heard = Heard()
                 segment(ws, inbox, failure, voice, r, heard)
-                heard.toSegment(i, r, offsetMs)?.let(out::add)
+                heard.toSegment(i, r, room[i], offsetMs)?.let(out::add)
                 streamedMs += r.endMs - r.startMs + TAIL_MS
                 i++
                 onDone(i)
@@ -166,7 +168,7 @@ class GeminiLiveTranslator(
             if (sc.optBoolean("turnComplete") || sc.optBoolean("generationComplete")) complete = true
         }
 
-        fun toSegment(index: Int, r: SpeechDetector.Range, offsetMs: Long): DubbedSegment? {
+        fun toSegment(index: Int, r: SpeechDetector.Range, roomMs: Long, offsetMs: Long): DubbedSegment? {
             val total = samples.sumOf { it.size }
             val slot = r.endMs - r.startMs
             if (total == 0) {
@@ -180,10 +182,10 @@ class GeminiLiveTranslator(
                     w.write(f, 0, f.size)
                 }
             }
-            val ms = total * 1000L / rate
-            // No TTS rate to tune here: a dub that runs long is played up to 1.15x faster instead.
-            val speed = if (slot > 0) (ms.toFloat() / slot).coerceIn(1f, AudioFitter.MAX_RATE) else 1f
-            DubLog.i(TAG, "segment $index measured=${ms}ms slot=${slot}ms speed=$speed")
+            val ms = WavTrim.trim(file) ?: (total * 1000L / rate)
+            // No TTS rate to tune here: a dub that runs past the next line is played up to 1.15x faster.
+            val speed = if (roomMs > 0) (ms.toFloat() / roomMs).coerceIn(1f, AudioFitter.MAX_RATE) else 1f
+            DubLog.i(TAG, "segment $index measured=${ms}ms slot=${slot}ms room=${roomMs}ms speed=$speed")
             return DubbedSegment(r.startMs + offsetMs, slot, source.toString().trim(), text.toString().trim(), file, ms, 1f, speed)
         }
     }
@@ -231,20 +233,6 @@ class GeminiLiveTranslator(
         msg.optJSONObject("error")?.let { throw OnlineUnavailableException("Gemini báo lỗi: ${it.optString("message")}") }
     }
 
-    /** Live Translate takes only a target language and the transcription switches. */
-    private fun setup() = JSONObject().put(
-        "setup",
-        JSONObject()
-            .put("model", "models/$model")
-            .put(
-                "generationConfig",
-                JSONObject()
-                    .put("responseModalities", JSONArray().put("AUDIO"))
-                    .put("inputAudioTranscription", JSONObject())
-                    .put("outputAudioTranscription", JSONObject())
-                    .put("translationConfig", JSONObject().put("targetLanguageCode", "vi")),
-            ),
-    )
 
     /** Samples [from]..[to] of [pcm], zeros past its end. */
     private fun audioMessage(pcm: ShortArray, from: Int, to: Int): JSONObject {
@@ -272,6 +260,26 @@ class GeminiLiveTranslator(
 
     companion object {
         const val TAG = "CutVietGemini"
+
+        /**
+         * Live Translate setup: a target language and the transcription switches, nothing else.
+         * The transcription switches belong to the setup itself and the translation settings to
+         * its generationConfig (as the google-genai SDK sends them; the server rejects
+         * inputAudioTranscription inside generationConfig).
+         */
+        fun setupMessage(model: String): JSONObject = JSONObject().put(
+            "setup",
+            JSONObject()
+                .put("model", "models/$model")
+                .put(
+                    "generationConfig",
+                    JSONObject()
+                        .put("responseModalities", JSONArray().put("AUDIO"))
+                        .put("translationConfig", JSONObject().put("targetLanguageCode", "vi")),
+                )
+                .put("inputAudioTranscription", JSONObject())
+                .put("outputAudioTranscription", JSONObject()),
+        )
         /** Default model; editable in the dubbing settings. */
         const val DEFAULT_MODEL = "gemini-3.5-live-translate-preview"
         /** 100 ms of 16 kHz audio per message, as the Live Translate guide recommends. */

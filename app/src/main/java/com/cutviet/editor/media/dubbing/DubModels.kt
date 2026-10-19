@@ -49,9 +49,18 @@ interface SpeechToText {
     suspend fun transcribe(source: AudioSource, language: SourceLanguage, progress: (Float) -> Unit): List<SpeechSegment>
 }
 
-/** Text translation into Vietnamese, given the neighbouring sentences as context. */
-interface TextTranslator {
-    suspend fun translate(segments: List<SpeechSegment>, language: SourceLanguage, progress: (Float) -> Unit): List<String>
+/**
+ * Text translation into Vietnamese, given the neighbouring sentences as context. The engine may
+ * stay loaded after [translate] so [shorten] is quick; [close] frees it.
+ */
+interface TextTranslator : AutoCloseable {
+    /** [budgets]: most syllables each line may have to fit its time. */
+    suspend fun translate(segments: List<SpeechSegment>, language: SourceLanguage, budgets: List<Int>, progress: (Float) -> Unit): List<String>
+
+    /** A shorter version of a translated line, at most [maxSyllables], or null. */
+    suspend fun shorten(source: String, text: String, language: SourceLanguage, maxSyllables: Int): String? = null
+
+    override fun close() {}
 }
 
 /** Thrown when a pipeline step is not available on this phone (model missing, no network...). */

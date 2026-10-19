@@ -14,11 +14,20 @@ object TranslationPrompt {
     const val WINDOW = 8
     const val CONTEXT = 3
 
-    /** Most syllables the Vietnamese line may have to be spoken in [slotMs] at up to 1.1x. */
-    fun syllableBudget(slotMs: Long): Int =
-        max(2, (slotMs / 1000.0 * VoiceEngine.DEFAULT_SYLLABLES_PER_SECOND * 1.1).roundToInt())
+    /**
+     * Most syllables the Vietnamese line may have to be spoken in [roomMs] at up to 1.1x, for a
+     * voice that speaks [syllablesPerSecond] at rate 1.0.
+     */
+    fun syllableBudget(roomMs: Long, syllablesPerSecond: Double = VoiceEngine.DEFAULT_SYLLABLES_PER_SECOND): Int =
+        max(2, (roomMs / 1000.0 * syllablesPerSecond * 1.1).roundToInt())
 
-    fun build(language: SourceLanguage, context: List<SpeechSegment>, lines: List<SpeechSegment>): String = buildString {
+    /** [budgets]: syllable limit of each line, by default from its own slot. */
+    fun build(
+        language: SourceLanguage,
+        context: List<SpeechSegment>,
+        lines: List<SpeechSegment>,
+        budgets: List<Int> = lines.map { syllableBudget(it.slotMs) },
+    ): String = buildString {
         append("Dịch các câu thoại sau từ ${language.label.lowercase()} sang tiếng Việt tự nhiên, giữ đúng sắc thái, ")
         append("giọng điệu và cách xưng hô phù hợp ngữ cảnh. Không dịch từng chữ. ")
         append("Đây là lời thoại để lồng tiếng, nên mỗi câu dịch không được dài hơn số âm tiết ghi trong ngoặc vuông. ")
@@ -29,9 +38,18 @@ object TranslationPrompt {
         }
         append("\nCâu cần dịch:\n")
         lines.forEachIndexed { i, s ->
-            append(i + 1).append(". [tối đa ").append(syllableBudget(s.slotMs)).append(" âm tiết] ")
+            append(i + 1).append(". [tối đa ").append(budgets[i]).append(" âm tiết] ")
             append(s.text.trim()).append('\n')
         }
+    }
+
+    /** Asks for a shorter version of one dubbed line that ran past the time it has. */
+    fun shorten(language: SourceLanguage, source: String, current: String, maxSyllables: Int): String = buildString {
+        append("Câu lồng tiếng tiếng Việt dưới đây quá dài so với thời gian nói. ")
+        append("Hãy viết lại ngắn hơn, tối đa $maxSyllables âm tiết, giữ ý chính và giọng điệu tự nhiên, ")
+        append("có thể bỏ từ đệm hoặc ý phụ. Chỉ trả về câu đã rút gọn, không giải thích.\n")
+        append("Câu gốc (${language.label.lowercase()}): ").append(source.trim()).append('\n')
+        append("Bản dịch hiện tại: ").append(current.trim()).append('\n')
     }
 
     private val NUMBERED = Regex("""^\s*(\d+)\s*[.):：、]\s*(.*)$""")
