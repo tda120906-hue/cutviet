@@ -3,7 +3,6 @@ package com.cutviet.editor.media.dubbing
 import android.content.Context
 import android.net.Uri
 import android.os.SystemClock
-import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
@@ -47,7 +46,7 @@ class WhisperAsr(
         withContext(Dispatchers.IO) {
             AudioPcmDecoder.decode(context, Uri.parse(source.uri), source.startMs, source.endMs, pcm, { progress(it * 0.1f) }, { !ctx.isActive })
         }
-        Log.i(TAG, "decode ${SystemClock.elapsedRealtime() - t0} ms, ${pcm.length() / 4 / AudioPcmDecoder.SAMPLE_RATE} s of audio")
+        DubLog.i(TAG, "decode ${SystemClock.elapsedRealtime() - t0} ms, ${pcm.length() / 4 / AudioPcmDecoder.SAMPLE_RATE} s of audio")
 
         val json = try {
             runWhisper(pcm, language) { progress(0.1f + 0.9f * it / 100f) }
@@ -62,7 +61,7 @@ class WhisperAsr(
         val t0 = SystemClock.elapsedRealtime()
         val handle = withContext(Dispatchers.IO) { WhisperNative.load(model.absolutePath) }
         if (handle == 0L) throw StepUnavailableException("Model nhận dạng giọng nói bị lỗi, hãy tải lại")
-        Log.i(TAG, "model load ${SystemClock.elapsedRealtime() - t0} ms")
+        DubLog.i(TAG, "model load ${SystemClock.elapsedRealtime() - t0} ms")
         // A dedicated thread with a large stack: whisper.cpp's decoder needs more stack than
         // coroutine worker threads have. The thread owns the model and frees it when done, so a
         // cancel (which only asks whisper to stop) can never free it while it is still in use.
@@ -75,7 +74,7 @@ class WhisperAsr(
                 } finally {
                     WhisperNative.free(handle)
                 }
-                Log.i(TAG, "transcribe ${SystemClock.elapsedRealtime() - t1} ms")
+                DubLog.i(TAG, "transcribe ${SystemClock.elapsedRealtime() - t1} ms")
                 if (cont.isActive) {
                     if (result != null) cont.resume(result)
                     else cont.resumeWith(Result.failure(StepUnavailableException("Nhận dạng giọng nói thất bại")))

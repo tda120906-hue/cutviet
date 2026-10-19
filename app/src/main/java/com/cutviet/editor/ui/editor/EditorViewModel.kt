@@ -603,7 +603,8 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
                     val step = info.progress.getString(DubbingWorker.KEY_STEP)
                         ?.let { runCatching { DubbingPipeline.Step.valueOf(it) }.getOrNull() }
                     val pct = (info.progress.getFloat(DubbingWorker.KEY_PROGRESS, 0f) * 100).toInt()
-                    dubStatus = if (step != null) "${step.label}… $pct%" else "Đang chuẩn bị lồng tiếng…"
+                    val note = info.progress.getString(DubbingWorker.KEY_NOTE)?.let { " · $it" }.orEmpty()
+                    dubStatus = if (step != null) "${step.label}… $pct%$note" else "Đang chuẩn bị lồng tiếng…"
                     return@collect
                 }
                 val wasRunning = dubStatus != null

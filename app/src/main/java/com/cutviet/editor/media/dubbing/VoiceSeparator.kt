@@ -6,7 +6,6 @@ import ai.onnxruntime.OrtSession
 import android.content.Context
 import android.net.Uri
 import android.os.SystemClock
-import android.util.Log
 import com.cutviet.editor.media.dsp.StereoStft
 import com.cutviet.editor.media.dsp.WavWriter
 import kotlinx.coroutines.Dispatchers
@@ -41,7 +40,7 @@ class VoiceSeparator(private val context: Context, private val model: File, priv
             context, Uri.parse(sourceUri), startMs, endMs, pcm, { progress(it * 0.1f) }, { !job.isActiveSafe() },
             outRate = RATE, outChannels = 2,
         )
-        Log.i(TAG, "decode ${SystemClock.elapsedRealtime() - t0} ms, ${frames / RATE} s")
+        DubLog.i(TAG, "decode ${SystemClock.elapsedRealtime() - t0} ms, ${frames / RATE} s")
 
         val voice = File(workDir, "voice.wav")
         val background = File(workDir, "background.wav")
@@ -53,7 +52,7 @@ class VoiceSeparator(private val context: Context, private val model: File, priv
         val t1 = SystemClock.elapsedRealtime()
         try {
             env.createSession(model.absolutePath, opts).use { session ->
-                Log.i(TAG, "model load ${SystemClock.elapsedRealtime() - t1} ms")
+                DubLog.i(TAG, "model load ${SystemClock.elapsedRealtime() - t1} ms")
                 val inputName = session.inputNames.first()
                 val stft = StereoStft(N_FFT, HOP, DIM_F)
                 val dimT = stft.frames(CHUNK)
@@ -99,7 +98,7 @@ class VoiceSeparator(private val context: Context, private val model: File, priv
             opts.close()
             pcm.delete()
         }
-        Log.i(TAG, "separate ${SystemClock.elapsedRealtime() - t1} ms")
+        DubLog.i(TAG, "separate ${SystemClock.elapsedRealtime() - t1} ms")
         Stems(voice, background, frames * 1000 / RATE)
     }
 

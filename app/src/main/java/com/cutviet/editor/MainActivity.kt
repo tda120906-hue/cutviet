@@ -38,6 +38,8 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.BLACK),
         )
         if (savedInstanceState == null) handleIntent(intent)
+        // Note why the app died last time (crash, out of memory...) in the dubbing log.
+        Thread { com.cutviet.editor.media.dubbing.DubLog.recordExitReasons(applicationContext) }.start()
         setContent {
             CutVietTheme {
                 Box(Modifier.fillMaxSize().background(Color.Black).windowInsetsPadding(WindowInsets.safeDrawing)) {

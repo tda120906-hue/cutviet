@@ -5,7 +5,6 @@ import android.app.NotificationManager
 import android.content.Context
 import android.content.pm.ServiceInfo
 import android.os.Build
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
@@ -37,16 +36,25 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         val source = inputData.getString(KEY_SOURCE) ?: return Result.failure(error("Thiếu video nguồn"))
         val language = runCatching { SourceLanguage.valueOf(inputData.getString(KEY_LANGUAGE)!!) }
             .getOrDefault(SourceLanguage.ENGLISH)
+        DubLog.init(applicationContext)
+        if (runAttemptCount > 0) {
+            // The app was closed while this job ran (crash, out of memory, or killed by the
+            // system); WorkManager would start it again on its own. Stop instead of looping.
+            DubLog.w(DubbingPipeline.TAG, "job $id was interrupted last time (attempt $runAttemptCount), not restarting")
+            DubLog.recordExitReasons(applicationContext)
+            return Result.failure(error("Lần lồng tiếng trước bị dừng giữa chừng vì app bị đóng. Xem tab Nhật ký, rồi thử lại."))
+        }
         val dir = jobDir(applicationContext, id.toString()).apply { deleteRecursively(); mkdirs() }
+        DubLog.i(DubbingPipeline.TAG, "job $id: ${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE}, mode ${DubSettings(applicationContext).mode}")
 
-        setForeground(foregroundInfo(DubbingPipeline.Step.RECOGNIZE.label, 0f))
+        setForeground(foregroundInfo("Đang chuẩn bị", 0f))
         val voice = withContext(Dispatchers.Main) { VoiceEngine(applicationContext) }
         try {
             val ready = withTimeoutOrNull(15_000) {
                 while (voice.status.value == VoiceEngine.Status.LOADING) delay(100)
                 voice.status.value == VoiceEngine.Status.READY
             } ?: false
-            if (!ready) return Result.failure(error("Máy chưa có giọng đọc tiếng Việt"))
+            if (!ready) return fail("Máy chưa có giọng đọc tiếng Việt")
 
             val sourceStart = inputData.getLong(KEY_START, 0)
             val sourceEnd = inputData.getLong(KEY_END, 0)
@@ -67,13 +75,14 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                 if (step != lastStep || percent != lastPercent) {
                     lastStep = step
                     lastPercent = percent
-                    setProgressAsync(workDataOf(KEY_STEP to step.name, KEY_PROGRESS to p))
-                    notify(step.label, p)
+                    val note = pipeline.fallbackReason?.let { "online lỗi, đang chạy offline" }
+                    setProgressAsync(workDataOf(KEY_STEP to step.name, KEY_PROGRESS to p, KEY_NOTE to note))
+                    notify(if (note != null) "${step.label} ($note)" else step.label, p)
                 }
             }
             val timings = pipeline.timings.entries.joinToString { "${it.key.name}=${it.value}ms" }
-            Log.i(DubbingPipeline.TAG, "job $id: ${out.segments.size} lines, separated=${out.stems != null}, online=${out.usedOnline}, fallback=${out.fallbackReason}, $timings")
-            if (out.segments.isEmpty()) return Result.failure(error("Không nghe thấy lời nói nào trong video"))
+            DubLog.i(DubbingPipeline.TAG, "job $id done: ${out.segments.size} lines, separated=${out.stems != null}, online=${out.usedOnline}, fallback=${out.fallbackReason}, $timings")
+            if (out.segments.isEmpty()) return fail("Không nghe thấy lời nói nào trong video")
             resultFile(applicationContext, id.toString()).writeText(encode(out, sourceStart, pipeline.timings).toString())
             return Result.success(
                 workDataOf(
@@ -82,10 +91,12 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                 ),
             )
         } catch (e: StepUnavailableException) {
-            return Result.failure(error(e.message ?: "Bước này chưa dùng được trên máy"))
+            return fail(e.message ?: "Bước này chưa dùng được trên máy")
         } catch (e: kotlinx.coroutines.CancellationException) {
+            DubLog.i(DubbingPipeline.TAG, "job $id cancelled")
             throw e
         } catch (e: Exception) {
+            DubLog.w(DubbingPipeline.TAG, "job $id failed", e)
             return Result.failure(error("Lồng tiếng thất bại: ${e.message}"))
         } finally {
             withContext(NonCancellable + Dispatchers.Main) { voice.shutdown() }
@@ -93,6 +104,11 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
     }
 
     private fun error(message: String) = workDataOf(KEY_ERROR to message)
+
+    private fun fail(message: String): Result {
+        DubLog.w(DubbingPipeline.TAG, "job $id failed: $message")
+        return Result.failure(error(message))
+    }
 
     private fun notify(text: String, progress: Float) {
         val nm = applicationContext.getSystemService(NotificationManager::class.java)
@@ -145,6 +161,8 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         const val KEY_SEPARATED = "separated"
         const val KEY_ONLINE = "online"
         const val KEY_FALLBACK = "fallback"
+        /** Progress: set once the online branch gave up and offline is running. */
+        const val KEY_NOTE = "note"
         private const val CHANNEL = "dubbing"
         private const val NOTIFICATION_ID = 4107
         /** One dubbing job at a time. */
@@ -231,12 +249,16 @@ object Engines {
      */
     fun online(context: Context, workDir: File): GeminiLiveTranslator? {
         val s = DubSettings(context)
-        if (s.mode == DubMode.OFFLINE) return null
+        fun skip(why: String): GeminiLiveTranslator? {
+            DubLog.i(DubbingPipeline.TAG, "online not used: $why")
+            return null
+        }
+        if (s.mode == DubMode.OFFLINE) return skip("mode Offline")
         if (s.simulateQuota) return GeminiLiveTranslator(s.geminiKey, s.geminiModel, workDir, simulateQuota = true)
-        if (s.geminiKey.isBlank()) return null
+        if (s.geminiKey.isBlank()) return skip("no Gemini key")
         val cm = context.getSystemService(android.net.ConnectivityManager::class.java)
-        val caps = cm?.getNetworkCapabilities(cm.activeNetwork) ?: return null
-        if (!caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)) return null
+        val caps = cm?.getNetworkCapabilities(cm.activeNetwork) ?: return skip("no network")
+        if (!caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)) return skip("network has no internet")
         val unmetered = caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
         val offlineReady = DubModel.WHISPER_LARGE_V3.isReady(context) && DubModel.GEMMA_3N_E4B.isReady(context)
         val use = when (s.mode) {
@@ -244,7 +266,7 @@ object Engines {
             DubMode.AUTO -> unmetered || !offlineReady
             DubMode.OFFLINE -> false
         }
-        return if (use) GeminiLiveTranslator(s.geminiKey, s.geminiModel, workDir) else null
+        return if (use) GeminiLiveTranslator(s.geminiKey, s.geminiModel, workDir) else skip("Auto on mobile data with offline models ready")
     }
 
     /** Null when the separation model is not downloaded: the dub then only turns the whole clip down. */

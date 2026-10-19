@@ -1,7 +1,6 @@
 package com.cutviet.editor.media.dubbing
 
 import android.os.SystemClock
-import android.util.Log
 import com.cutviet.editor.media.VoiceEngine
 import java.io.File
 
@@ -35,38 +34,51 @@ class DubbingPipeline(
     /** Time spent in each step, in ms. */
     val timings = linkedMapOf<Step, Long>()
 
+    /** Why the online branch was given up, as soon as that happens (shown while offline runs). */
+    @Volatile
+    var fallbackReason: String? = null
+        private set
+
     suspend fun run(sourceUri: String, startMs: Long, endMs: Long, settings: Settings, progress: (Step, Float) -> Unit): Output {
         workDir.mkdirs()
+        DubLog.i(TAG, "start ${endMs - startMs} ms of audio, ${settings.language}, online=${online != null}, separation=${separator != null}, ${DubLog.memory(context)}")
         val stems = separator?.let { sep ->
-            timed(Step.SEPARATE) { sep.separate(sourceUri, startMs, endMs) { progress(Step.SEPARATE, it) } }
+            timed(Step.SEPARATE, progress) { sep.separate(sourceUri, startMs, endMs) { progress(Step.SEPARATE, it) } }
         }
         // Listen to the separated voice when there is one: no music or noise for Whisper to mishear.
         val source = if (stems != null) AudioSource(android.net.Uri.fromFile(stems.voice).toString(), 0, 0, startMs)
         else AudioSource(sourceUri, startMs, endMs, startMs) // decoded from startMs, so times start there
 
-        var fallback: String? = null
         if (online != null) {
             try {
-                val dubbed = timed(Step.ONLINE) { runOnline(online, source, settings) { progress(Step.ONLINE, it) } }
-                val gain = timed(Step.MERGE) { Loudness.gainTo(TARGET_LUFS, dubbed.map { it.file }) }
+                val dubbed = timed(Step.ONLINE, progress) { runOnline(online, source) { progress(Step.ONLINE, it) } }
+                val gain = timed(Step.MERGE, progress) { Loudness.gainTo(TARGET_LUFS, dubbed.map { it.file }) }
+                DubLog.i(TAG, "online done: ${dubbed.size} lines")
                 return Output(dubbed, stems, gain, usedOnline = true, fallbackReason = null)
-            } catch (e: OnlineUnavailableException) {
-                Log.w(TAG, "online branch failed, using offline: ${e.message}")
-                fallback = e.message
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Whatever went wrong online (quota, key, network, an answer we could not read),
+                // the offline engines still do the job.
+                val reason = (e as? OnlineUnavailableException)?.message ?: "${e.javaClass.simpleName}: ${e.message}"
+                DubLog.w(TAG, "online branch failed, using offline: $reason")
+                fallbackReason = reason
             }
         }
+        val fallback = fallbackReason
 
-        val segments = timed(Step.RECOGNIZE) {
+        val segments = timed(Step.RECOGNIZE, progress) {
             asr.transcribe(source, settings.language) { progress(Step.RECOGNIZE, it) }
         }.filter { it.text.isNotBlank() && it.slotMs > 0 }
+        DubLog.i(TAG, "recognized ${segments.size} sentences")
         if (segments.isEmpty()) return Output(emptyList(), stems, 1f, false, fallback)
 
-        val texts = timed(Step.TRANSLATE) {
+        val texts = timed(Step.TRANSLATE, progress) {
             translator.translate(segments, settings.language) { progress(Step.TRANSLATE, it) }
         }
         require(texts.size == segments.size) { "translator returned ${texts.size} of ${segments.size} lines" }
 
-        val dubbed = timed(Step.SPEAK) {
+        val dubbed = timed(Step.SPEAK, progress) {
             val out = ArrayList<DubbedSegment>()
             segments.forEachIndexed { i, seg ->
                 progress(Step.SPEAK, i.toFloat() / segments.size)
@@ -74,14 +86,13 @@ class DubbingPipeline(
             }
             out
         }
-        val gain = timed(Step.MERGE) {
-            progress(Step.MERGE, 0f)
+        val gain = timed(Step.MERGE, progress) {
             Loudness.gainTo(TARGET_LUFS, dubbed.map { it.file })
         }
         return Output(dubbed, stems, gain, false, fallback)
     }
 
-    private suspend fun runOnline(gemini: GeminiLiveTranslator, source: AudioSource, s: Settings, progress: (Float) -> Unit): List<DubbedSegment> {
+    private suspend fun runOnline(gemini: GeminiLiveTranslator, source: AudioSource, progress: (Float) -> Unit): List<DubbedSegment> {
         val pcm = File(workDir, "online_16k.f32")
         val job = kotlinx.coroutines.currentCoroutineContext()
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
@@ -91,9 +102,11 @@ class DubbingPipeline(
         }
         val voice = readFloats(pcm).also { pcm.delete() }
         val ranges = SpeechDetector.detect(voice, AudioPcmDecoder.SAMPLE_RATE)
-        Log.i(TAG, "online: ${ranges.size} speech segments")
-        if (ranges.isEmpty()) return emptyList()
-        return gemini.dub(voice, ranges, s.language, source.offsetMs) { progress(0.1f + 0.9f * it) }
+        DubLog.i(TAG, "online: ${ranges.size} speech segments")
+        if (ranges.isEmpty()) throw OnlineUnavailableException("Không tìm thấy đoạn lời nói nào để gửi online")
+        val dubbed = gemini.dub(voice, ranges, source.offsetMs) { progress(0.1f + 0.9f * it) }
+        if (dubbed.isEmpty()) throw OnlineUnavailableException("Gemini không trả về giọng dịch nào")
+        return dubbed
     }
 
     private fun readFloats(f: File): FloatArray {
@@ -114,19 +127,22 @@ class DubbingPipeline(
         } ?: return null
         val file = files[fit.rate] ?: lastFile ?: return null
         files.values.filter { it != file }.forEach { it.delete() }
-        Log.i(TAG, "segment $index rate=${fit.rate} measured=${fit.durationMs}ms slot=${seg.slotMs}ms attempts=${fit.attempts}")
-        if (!fit.withinTolerance) Log.w(TAG, "segment $index off by ${fit.durationMs - seg.slotMs} ms at rate ${fit.rate}")
+        DubLog.i(TAG, "segment $index rate=${fit.rate} measured=${fit.durationMs}ms slot=${seg.slotMs}ms attempts=${fit.attempts}")
+        if (!fit.withinTolerance) DubLog.w(TAG, "segment $index off by ${fit.durationMs - seg.slotMs} ms at rate ${fit.rate}")
         return DubbedSegment(seg.startMs, seg.slotMs, seg.text, line, file, fit.durationMs, fit.rate)
     }
 
-    private inline fun <T> timed(step: Step, block: () -> T): T {
+    /** Runs one step: shows it right away (at 0%) and logs how long it took. */
+    private inline fun <T> timed(step: Step, progress: (Step, Float) -> Unit, block: () -> T): T {
         val t0 = SystemClock.elapsedRealtime()
+        progress(step, 0f)
+        DubLog.i(TAG, "${step.name} start")
         try {
             return block()
         } finally {
             val ms = SystemClock.elapsedRealtime() - t0
             timings[step] = ms
-            Log.i(TAG, "${step.name}: $ms ms")
+            DubLog.i(TAG, "${step.name}: $ms ms")
         }
     }
 

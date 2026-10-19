@@ -34,6 +34,7 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -46,7 +47,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -56,6 +60,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
+import com.cutviet.editor.media.dubbing.DubLog
 import com.cutviet.editor.media.dubbing.DubMode
 import com.cutviet.editor.media.dubbing.DubModel
 import com.cutviet.editor.media.dubbing.DubSettings
@@ -86,9 +91,14 @@ fun DubbingDialog(vm: EditorViewModel, onDismiss: () -> Unit) {
             TabRow(selectedTabIndex = tab, containerColor = Color(0xFF101014), contentColor = Color.White) {
                 Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Lồng tiếng") })
                 Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Model & khoá") })
+                Tab(selected = tab == 2, onClick = { tab = 2 }, text = { Text("Nhật ký") })
             }
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp)) {
-                if (tab == 0) DubTab(vm, settings, onOpenModels = { tab = 1 }, onStarted = onDismiss) else ModelsTab(settings)
+                when (tab) {
+                    0 -> DubTab(vm, settings, onOpenModels = { tab = 1 }, onStarted = onDismiss)
+                    1 -> ModelsTab(settings)
+                    else -> LogTab()
+                }
             }
         }
     }
@@ -206,6 +216,45 @@ private fun ModelsTab(settings: DubSettings) {
             Text("Để thử: nhánh online báo hết hạn mức và tự chuyển sang offline.", color = TextDim, fontSize = 12.sp)
         }
         Switch(checked = simulate, onCheckedChange = { simulate = it; settings.simulateQuota = it })
+    }
+}
+
+/** The on-phone dubbing log, to copy and send when something goes wrong. */
+@Composable
+private fun LogTab() {
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+    var text by remember { mutableStateOf<String?>(null) }
+    var reload by remember { mutableIntStateOf(0) }
+    LaunchedEffect(reload) {
+        text = withContext(Dispatchers.IO) {
+            DubLog.recordExitReasons(context)
+            DubLog.read(context)
+        }
+    }
+    Text(
+        "Ghi lại từng bước, thời gian, lý do chuyển offline và lý do app bị đóng. Khi có lỗi, bấm Sao chép rồi dán vào tin nhắn gửi Claude. Nhật ký không chứa khoá API.",
+        color = TextDim, fontSize = 12.sp,
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 8.dp)) {
+        Button(
+            onClick = { text?.let { clipboard.setText(AnnotatedString(it.takeLast(60_000))) } },
+            enabled = !text.isNullOrEmpty(),
+            colors = ButtonDefaults.buttonColors(containerColor = Accent),
+        ) { Text("Sao chép") }
+        OutlinedButton(onClick = { reload++ }) { Text("Tải lại") }
+        OutlinedButton(onClick = { DubLog.clear(context); reload++ }) { Text("Xoá") }
+    }
+    val shown = text
+    when {
+        shown == null -> Text("Đang đọc…", color = TextDim, fontSize = 13.sp)
+        shown.isEmpty() -> Text("Chưa có gì.", color = TextDim, fontSize = 13.sp)
+        // Newest at the top; the full log goes to the clipboard.
+        else -> Text(
+            // Entries start with a time stamp; their continuation lines stay with them.
+            shown.trim().split(Regex("\n(?=\\d{2}/\\d{2} \\d{2}:)")).takeLast(200).reversed().joinToString("\n"),
+            color = Color.White, fontSize = 11.sp, fontFamily = FontFamily.Monospace, lineHeight = 14.sp,
+        )
     }
 }
 

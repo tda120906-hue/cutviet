@@ -100,7 +100,7 @@ dependencies {
 
     implementation("androidx.work:work-runtime-ktx:2.10.0")
     // On-device LLM (Gemma 3n) for offline translation.
-    implementation("com.google.mediapipe:tasks-genai:0.10.24")
+    implementation("com.google.mediapipe:tasks-genai:0.10.27")
     // Voice / background separation model (UVR MDX-Net) on the CPU.
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.30.0")
     // WebSocket client for the online (Gemini Live) branch.

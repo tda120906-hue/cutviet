@@ -5,7 +5,6 @@ import android.app.NotificationManager
 import android.content.Context
 import android.content.pm.ServiceInfo
 import android.os.Build
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
@@ -156,7 +155,7 @@ class ModelDownloadWorker(context: Context, params: WorkerParameters) : Coroutin
         } catch (e: DeniedException) {
             Result.failure(workDataOf(KEY_ERROR to denied(model)))
         } catch (e: java.io.IOException) {
-            Log.w(TAG, "download ${model.name}", e)
+            DubLog.w(TAG, "download ${model.name}", e)
             retryOrFail(e.message ?: "network")
         }
     }
@@ -173,7 +172,7 @@ class ModelDownloadWorker(context: Context, params: WorkerParameters) : Coroutin
         else "Hugging Face từ chối tải. Hãy mở trang ${model.repo} bằng tài khoản của token và bấm đồng ý giấy phép."
 
     private fun retryOrFail(reason: String): Result {
-        Log.w(TAG, "download failed: $reason (attempt $runAttemptCount)")
+        DubLog.w(TAG, "download failed: $reason (attempt $runAttemptCount)")
         return if (runAttemptCount < 5) Result.retry()
         else Result.failure(workDataOf(KEY_ERROR to "Tải model thất bại: $reason"))
     }
