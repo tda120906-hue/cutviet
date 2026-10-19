@@ -18,6 +18,16 @@ class DubSettings(context: Context) {
         get() = prefs.getString("gemini_key", "").orEmpty()
         set(v) = prefs.edit().putString("gemini_key", v.trim()).apply()
 
+    /** Gemini Live model id used by the online branch. */
+    var geminiModel: String
+        get() = prefs.getString("gemini_model", null)?.takeIf { it.isNotBlank() } ?: GeminiLiveTranslator.DEFAULT_MODEL
+        set(v) = prefs.edit().putString("gemini_model", v.trim()).apply()
+
+    /** Test switch: the online branch acts as if Gemini answered 429, to check the offline fallback. */
+    var simulateQuota: Boolean
+        get() = prefs.getBoolean("simulate_429", false)
+        set(v) = prefs.edit().putBoolean("simulate_429", v).apply()
+
     var hfToken: String
         get() = prefs.getString("hf_token", "").orEmpty()
         set(v) = prefs.edit().putString("hf_token", v.trim()).apply()

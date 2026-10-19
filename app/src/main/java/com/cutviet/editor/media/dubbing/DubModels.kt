@@ -34,6 +34,8 @@ data class DubbedSegment(
     val file: File,
     val durationMs: Long,
     val rate: Float,
+    /** Played this much faster on the timeline (online dubs that run a little long). */
+    val playbackSpeed: Float = 1f,
 )
 
 /**

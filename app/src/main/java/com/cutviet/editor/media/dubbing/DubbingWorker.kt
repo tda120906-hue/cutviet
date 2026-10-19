@@ -52,6 +52,8 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
             val sourceEnd = inputData.getLong(KEY_END, 0)
             val pipeline = DubbingPipeline(
                 separator = Engines.separator(applicationContext, dir),
+                online = Engines.online(applicationContext, dir),
+                context = applicationContext,
                 asr = Engines.speechToText(applicationContext, dir),
                 translator = Engines.translator(applicationContext),
                 voice = voice,
@@ -70,10 +72,15 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                 }
             }
             val timings = pipeline.timings.entries.joinToString { "${it.key.name}=${it.value}ms" }
-            Log.i(DubbingPipeline.TAG, "job ${id}: ${out.segments.size} lines, separated=${out.stems != null}, $timings")
+            Log.i(DubbingPipeline.TAG, "job $id: ${out.segments.size} lines, separated=${out.stems != null}, online=${out.usedOnline}, fallback=${out.fallbackReason}, $timings")
             if (out.segments.isEmpty()) return Result.failure(error("Không nghe thấy lời nói nào trong video"))
             resultFile(applicationContext, id.toString()).writeText(encode(out, sourceStart, pipeline.timings).toString())
-            return Result.success(workDataOf(KEY_COUNT to out.segments.size, KEY_SEPARATED to (out.stems != null)))
+            return Result.success(
+                workDataOf(
+                    KEY_COUNT to out.segments.size, KEY_SEPARATED to (out.stems != null),
+                    KEY_ONLINE to out.usedOnline, KEY_FALLBACK to out.fallbackReason,
+                ),
+            )
         } catch (e: StepUnavailableException) {
             return Result.failure(error(e.message ?: "Bước này chưa dùng được trên máy"))
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -136,14 +143,28 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         const val KEY_ERROR = "error"
         const val KEY_COUNT = "count"
         const val KEY_SEPARATED = "separated"
+        const val KEY_ONLINE = "online"
+        const val KEY_FALLBACK = "fallback"
         private const val CHANNEL = "dubbing"
         private const val NOTIFICATION_ID = 4107
         /** One dubbing job at a time. */
         const val UNIQUE_NAME = "dubbing"
 
-        /** Dubs [startMs]..[endMs] of the source (its trimmed part on the timeline). */
-        fun enqueue(context: Context, sourceUri: String, startMs: Long, endMs: Long, language: SourceLanguage, voiceName: String?): java.util.UUID {
+        fun projectTag(projectId: String) = "project:$projectId"
+
+        /**
+         * Dubs [startMs]..[endMs] of the source (its trimmed part on the timeline). The project,
+         * clip and original-voice level ride along as tags so the editor can place the result even
+         * after the app was closed while the job ran.
+         */
+        fun enqueue(
+            context: Context, sourceUri: String, startMs: Long, endMs: Long, language: SourceLanguage, voiceName: String?,
+            projectId: String, clipId: String, originalVolume: Float,
+        ): java.util.UUID {
             val req = OneTimeWorkRequestBuilder<DubbingWorker>()
+                .addTag(projectTag(projectId))
+                .addTag("clip:$clipId")
+                .addTag("orig:$originalVolume")
                 .setInputData(
                     workDataOf(
                         KEY_SOURCE to sourceUri, KEY_START to startMs, KEY_END to endMs,
@@ -169,6 +190,7 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                             put("startMs", s.startMs); put("slotMs", s.slotMs)
                             put("sourceText", s.sourceText); put("text", s.text)
                             put("file", s.file.absolutePath); put("durationMs", s.durationMs); put("rate", s.rate.toDouble())
+                            put("playbackSpeed", s.playbackSpeed.toDouble())
                         })
                     }
                 })
@@ -190,6 +212,7 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                 DubbedSegment(
                     o.getLong("startMs"), o.getLong("slotMs"), o.getString("sourceText"), o.getString("text"),
                     File(o.getString("file")), o.getLong("durationMs"), o.getDouble("rate").toFloat(),
+                    o.optDouble("playbackSpeed", 1.0).toFloat(),
                 )
             }
             val stems = root.optJSONObject("stems")?.let {
@@ -202,6 +225,28 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
 
 /** Chooses the offline speech-to-text and translation engines. */
 object Engines {
+    /**
+     * Router for the online branch. Offline: never. Online first: whenever a key is set and the phone
+     * is online. Auto: online on Wi-Fi, or on mobile data when the offline models are missing.
+     */
+    fun online(context: Context, workDir: File): GeminiLiveTranslator? {
+        val s = DubSettings(context)
+        if (s.mode == DubMode.OFFLINE) return null
+        if (s.simulateQuota) return GeminiLiveTranslator(s.geminiKey, s.geminiModel, workDir, simulateQuota = true)
+        if (s.geminiKey.isBlank()) return null
+        val cm = context.getSystemService(android.net.ConnectivityManager::class.java)
+        val caps = cm?.getNetworkCapabilities(cm.activeNetwork) ?: return null
+        if (!caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)) return null
+        val unmetered = caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+        val offlineReady = DubModel.WHISPER_LARGE_V3.isReady(context) && DubModel.GEMMA_3N_E4B.isReady(context)
+        val use = when (s.mode) {
+            DubMode.ONLINE_FIRST -> true
+            DubMode.AUTO -> unmetered || !offlineReady
+            DubMode.OFFLINE -> false
+        }
+        return if (use) GeminiLiveTranslator(s.geminiKey, s.geminiModel, workDir) else null
+    }
+
     /** Null when the separation model is not downloaded: the dub then only turns the whole clip down. */
     fun separator(context: Context, workDir: File): VoiceSeparator? {
         val model = DubModel.MDX_VOC_FT

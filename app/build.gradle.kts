@@ -103,6 +103,8 @@ dependencies {
     implementation("com.google.mediapipe:tasks-genai:0.10.24")
     // Voice / background separation model (UVR MDX-Net) on the CPU.
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.30.0")
+    // WebSocket client for the online (Gemini Live) branch.
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     testImplementation("junit:junit:4.13.2")
     // Real org.json for unit tests (android.jar only has stubs).

@@ -557,13 +557,20 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
 
     // ---- dubbing ----
 
+    var showDubbing by mutableStateOf(false)
+
     /** Progress line of the running dubbing job, or null when none runs. */
     var dubStatus by mutableStateOf<String?>(null)
         private set
 
+    // After the dubbing state above is initialised.
+    init {
+        watchDubbing()
+    }
+
     /**
-     * Starts dubbing the selected clip (or the one under the playhead) in the background. When the
-     * job succeeds its sentences become DUB tracks and the clip's own sound is set to [originalVolume].
+     * Starts dubbing the selected clip (or the one under the playhead) in the background. The job
+     * outlives this screen; [watchDubbing] applies its result whenever it finishes.
      */
     fun startDubbing(language: SourceLanguage, voiceName: String?, originalVolume: Float = 0f) {
         val index = selected ?: project.clipAt(playheadMs)?.first ?: return
@@ -572,48 +579,70 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
             toast = "Đoạn này không có âm thanh để lồng tiếng."
             return
         }
-        val app = getApplication<Application>()
-        val jobId = DubbingWorker.enqueue(app, clip.uri, clip.trimStartMs, clip.trimEndMs, language, voiceName)
-        val clipId = clip.id
+        if (dubStatus != null) {
+            toast = "Đang có một lượt lồng tiếng chạy."
+            return
+        }
+        DubbingWorker.enqueue(
+            getApplication(), clip.uri, clip.trimStartMs, clip.trimEndMs, language, voiceName,
+            projectId = project.id, clipId = clip.id, originalVolume = originalVolume,
+        )
         dubStatus = "Đang chuẩn bị lồng tiếng…"
+    }
+
+    /**
+     * Follows the dubbing job of this project, also one started before the app was closed: shows
+     * its progress and, once it succeeds, puts the dub on the timeline (exactly once).
+     */
+    private fun watchDubbing() {
+        val app = getApplication<Application>()
         viewModelScope.launch {
-            WorkManager.getInstance(app).getWorkInfoByIdFlow(jobId).collect { info ->
-                info ?: return@collect
-                val step = info.progress.getString(DubbingWorker.KEY_STEP)
-                    ?.let { runCatching { DubbingPipeline.Step.valueOf(it) }.getOrNull() }
-                if (step != null) {
+            WorkManager.getInstance(app).getWorkInfosForUniqueWorkFlow(DubbingWorker.UNIQUE_NAME).collect { infos ->
+                val info = infos.lastOrNull { it.tags.contains(DubbingWorker.projectTag(project.id)) } ?: return@collect
+                if (!info.state.isFinished) {
+                    val step = info.progress.getString(DubbingWorker.KEY_STEP)
+                        ?.let { runCatching { DubbingPipeline.Step.valueOf(it) }.getOrNull() }
                     val pct = (info.progress.getFloat(DubbingWorker.KEY_PROGRESS, 0f) * 100).toInt()
-                    dubStatus = "${step.label}… $pct%"
+                    dubStatus = if (step != null) "${step.label}… $pct%" else "Đang chuẩn bị lồng tiếng…"
+                    return@collect
                 }
-                if (!info.state.isFinished) return@collect
+                val wasRunning = dubStatus != null
                 dubStatus = null
                 when (info.state) {
-                    WorkInfo.State.SUCCEEDED -> {
-                        val result = withContext(Dispatchers.IO) {
-                            runCatching { DubbingWorker.decode(DubbingWorker.resultFile(app, jobId.toString()).readText()) }.getOrNull()
-                        }
-                        val at = project.clips.indexOfFirst { it.id == clipId }
-                        if (result == null || at < 0) {
-                            toast = "Không đọc được kết quả lồng tiếng."
-                        } else {
-                            val lines = result.segments.map {
-                                ProjectOps.DubLine(it.startMs, Uri.fromFile(it.file).toString(), it.durationMs, it.text)
-                            }
-                            val stems = result.stems?.let {
-                                ProjectOps.DubStems(
-                                    Uri.fromFile(it.voice).toString(), Uri.fromFile(it.background).toString(),
-                                    result.sourceStartMs, it.durationMs,
-                                )
-                            }
-                            commit(ProjectOps.applyDub(project, at, lines, originalVolume, stems, result.gain))
-                            toast = if (stems != null) "Đã lồng tiếng ${lines.size} câu, giữ nguyên âm thanh nền."
-                            else "Đã lồng tiếng ${lines.size} câu. Chưa có model tách giọng nên tiếng gốc chỉ được giảm cả đoạn."
-                        }
-                    }
-                    WorkInfo.State.FAILED -> toast = info.outputData.getString(DubbingWorker.KEY_ERROR) ?: "Lồng tiếng thất bại."
-                    else -> toast = "Đã huỷ lồng tiếng."
+                    WorkInfo.State.SUCCEEDED -> applyDubResult(app, info)
+                    WorkInfo.State.FAILED -> if (wasRunning) toast = info.outputData.getString(DubbingWorker.KEY_ERROR) ?: "Lồng tiếng thất bại."
+                    else -> if (wasRunning) toast = "Đã huỷ lồng tiếng."
                 }
             }
+        }
+    }
+
+    private suspend fun applyDubResult(app: Application, info: WorkInfo) {
+        val jobId = info.id.toString()
+        val file = DubbingWorker.resultFile(app, jobId)
+        if (!file.exists()) return // already applied
+        val result = withContext(Dispatchers.IO) { runCatching { DubbingWorker.decode(file.readText()) }.getOrNull() }
+        val clipId = info.tags.firstOrNull { it.startsWith("clip:") }?.removePrefix("clip:")
+        val originalVolume = info.tags.firstOrNull { it.startsWith("orig:") }?.removePrefix("orig:")?.toFloatOrNull() ?: 0f
+        val at = project.clips.indexOfFirst { it.id == clipId }
+        withContext(Dispatchers.IO) { file.renameTo(java.io.File(file.parentFile, "applied.json")) }
+        if (result == null || at < 0) {
+            toast = "Không đặt được kết quả lồng tiếng (đoạn video đã bị xoá?)."
+            return
+        }
+        val lines = result.segments.map {
+            ProjectOps.DubLine(it.startMs, Uri.fromFile(it.file).toString(), it.durationMs, it.text, it.playbackSpeed)
+        }
+        val stems = result.stems?.let {
+            ProjectOps.DubStems(Uri.fromFile(it.voice).toString(), Uri.fromFile(it.background).toString(), result.sourceStartMs, it.durationMs)
+        }
+        commit(ProjectOps.applyDub(project, at, lines, originalVolume, stems, result.gain))
+        val fallback = info.outputData.getString(DubbingWorker.KEY_FALLBACK)
+        toast = buildString {
+            append("Đã lồng tiếng ${lines.size} câu")
+            append(if (info.outputData.getBoolean(DubbingWorker.KEY_ONLINE, false)) " (online)" else " (offline)")
+            append(if (stems != null) ", giữ nguyên âm thanh nền." else ". Chưa có model tách giọng nên tiếng gốc chỉ được giảm cả đoạn.")
+            if (fallback != null) append(" Online lỗi nên đã chuyển offline: $fallback")
         }
     }
 

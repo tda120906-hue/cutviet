@@ -11,6 +11,9 @@ import java.io.File
  */
 class DubbingPipeline(
     private val separator: VoiceSeparator?,
+    /** Online speech-to-speech; when it fails the offline engines take over. */
+    private val online: GeminiLiveTranslator?,
+    private val context: android.content.Context,
     private val asr: SpeechToText,
     private val translator: TextTranslator,
     private val voice: VoiceEngine,
@@ -18,6 +21,7 @@ class DubbingPipeline(
 ) {
     enum class Step(val label: String) {
         SEPARATE("Đang tách giọng"),
+        ONLINE("Đang dịch online"),
         RECOGNIZE("Đang nhận dạng"),
         TRANSLATE("Đang dịch"),
         SPEAK("Đang tạo giọng"),
@@ -26,7 +30,7 @@ class DubbingPipeline(
 
     data class Settings(val language: SourceLanguage, val voiceName: String?, val pitch: Float = 1f)
 
-    class Output(val segments: List<DubbedSegment>, val stems: Stems?, val gain: Float)
+    class Output(val segments: List<DubbedSegment>, val stems: Stems?, val gain: Float, val usedOnline: Boolean, val fallbackReason: String?)
 
     /** Time spent in each step, in ms. */
     val timings = linkedMapOf<Step, Long>()
@@ -38,11 +42,24 @@ class DubbingPipeline(
         }
         // Listen to the separated voice when there is one: no music or noise for Whisper to mishear.
         val source = if (stems != null) AudioSource(android.net.Uri.fromFile(stems.voice).toString(), 0, 0, startMs)
-        else AudioSource(sourceUri, startMs, endMs, 0)
+        else AudioSource(sourceUri, startMs, endMs, startMs) // decoded from startMs, so times start there
+
+        var fallback: String? = null
+        if (online != null) {
+            try {
+                val dubbed = timed(Step.ONLINE) { runOnline(online, source, settings) { progress(Step.ONLINE, it) } }
+                val gain = timed(Step.MERGE) { Loudness.gainTo(TARGET_LUFS, dubbed.map { it.file }) }
+                return Output(dubbed, stems, gain, usedOnline = true, fallbackReason = null)
+            } catch (e: OnlineUnavailableException) {
+                Log.w(TAG, "online branch failed, using offline: ${e.message}")
+                fallback = e.message
+            }
+        }
+
         val segments = timed(Step.RECOGNIZE) {
             asr.transcribe(source, settings.language) { progress(Step.RECOGNIZE, it) }
         }.filter { it.text.isNotBlank() && it.slotMs > 0 }
-        if (segments.isEmpty()) return Output(emptyList(), stems, 1f)
+        if (segments.isEmpty()) return Output(emptyList(), stems, 1f, false, fallback)
 
         val texts = timed(Step.TRANSLATE) {
             translator.translate(segments, settings.language) { progress(Step.TRANSLATE, it) }
@@ -61,7 +78,28 @@ class DubbingPipeline(
             progress(Step.MERGE, 0f)
             Loudness.gainTo(TARGET_LUFS, dubbed.map { it.file })
         }
-        return Output(dubbed, stems, gain)
+        return Output(dubbed, stems, gain, false, fallback)
+    }
+
+    private suspend fun runOnline(gemini: GeminiLiveTranslator, source: AudioSource, s: Settings, progress: (Float) -> Unit): List<DubbedSegment> {
+        val pcm = File(workDir, "online_16k.f32")
+        val job = kotlinx.coroutines.currentCoroutineContext()
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            AudioPcmDecoder.decode(context, android.net.Uri.parse(source.uri), source.startMs, source.endMs, pcm, { progress(it * 0.1f) }, {
+                job[kotlinx.coroutines.Job]?.isActive == false
+            })
+        }
+        val voice = readFloats(pcm).also { pcm.delete() }
+        val ranges = SpeechDetector.detect(voice, AudioPcmDecoder.SAMPLE_RATE)
+        Log.i(TAG, "online: ${ranges.size} speech segments")
+        if (ranges.isEmpty()) return emptyList()
+        return gemini.dub(voice, ranges, s.language, source.offsetMs) { progress(0.1f + 0.9f * it) }
+    }
+
+    private fun readFloats(f: File): FloatArray {
+        val bytes = f.readBytes()
+        val fb = java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN).asFloatBuffer()
+        return FloatArray(fb.remaining()).also { fb.get(it) }
     }
 
     private suspend fun speak(index: Int, seg: SpeechSegment, text: String, s: Settings): DubbedSegment? {

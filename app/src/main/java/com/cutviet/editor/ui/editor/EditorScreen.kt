@@ -61,6 +61,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Title
+import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VerticalSplit
 import androidx.compose.material3.Button
@@ -236,6 +237,7 @@ private fun EditorContent(vm: EditorViewModel, onBack: () -> Unit) {
         if (panel != null) {
             PanelHost(vm, panel, Modifier.height(if (typing) 220.dp else 290.dp))
         } else {
+            vm.dubStatus?.let { DubbingBanner(it, onOpen = { vm.showDubbing = true }) }
             Toolbar(vm, onAddMedia = { addMedia() }, onAddMusic = { addMusic() }, onAddOverlay = { addOverlay() })
         }
     }
@@ -252,6 +254,19 @@ private fun EditorContent(vm: EditorViewModel, onBack: () -> Unit) {
     }
     vm.eraserOverlayId?.let { id ->
         vm.project.overlays.firstOrNull { it.id == id }?.let { EraserDialog(vm, it) }
+    }
+    if (vm.showDubbing) DubbingDialog(vm, onDismiss = { vm.showDubbing = false })
+}
+
+@Composable
+private fun DubbingBanner(status: String, onOpen: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().background(Color(0xFF2A1F3A)).clickable(onClick = onOpen).padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Filled.Translate, null, tint = Color.White, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Text(status, color = Color.White, fontSize = 13.sp, maxLines = 1)
     }
 }
 
@@ -322,6 +337,7 @@ private fun Toolbar(vm: EditorViewModel, onAddMedia: () -> Unit, onAddMusic: () 
                 add(Tool("Tốc độ", Icons.Filled.Speed) { vm.openPanel(Panel.SPEED) })
                 add(Tool("Âm lượng", Icons.AutoMirrored.Filled.VolumeUp) { vm.openPanel(Panel.VOLUME) })
                 add(Tool("Tách âm thanh", Icons.AutoMirrored.Filled.CallSplit) { vm.extractAudioFromSelected() })
+                add(Tool("Lồng tiếng AI", Icons.Filled.Translate) { vm.showDubbing = true })
             }
             add(Tool("Bộ lọc", Icons.Filled.AutoAwesome) { vm.openPanel(Panel.FILTER) })
             add(Tool("Điều chỉnh", Icons.Filled.Tune) { vm.openPanel(Panel.ADJUST) })
@@ -340,6 +356,7 @@ private fun Toolbar(vm: EditorViewModel, onAddMedia: () -> Unit, onAddMusic: () 
             Tool("Âm thanh", Icons.Filled.MusicNote) { onAddMusic() },
             Tool("Lớp phủ", Icons.Filled.Layers) { onAddOverlay() },
             Tool("Giọng đọc AI", Icons.Filled.RecordVoiceOver) { vm.openPanel(Panel.VOICE) },
+            Tool("Lồng tiếng AI", Icons.Filled.Translate) { vm.showDubbing = true },
             Tool("Văn bản", Icons.Filled.Title) { clipTool(Panel.TEXT) },
             Tool("Nhãn dán", Icons.Filled.EmojiEmotions) { clipTool(Panel.STICKER) },
             Tool("Bộ lọc", Icons.Filled.AutoAwesome) { clipTool(Panel.FILTER) },
