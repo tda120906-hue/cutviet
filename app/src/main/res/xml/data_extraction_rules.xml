@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+. Keeps keys and multi-GB models out of cloud backup and device transfer. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="dub_secrets.xml" />
+        <exclude domain="file" path="models/" />
+        <exclude domain="file" path="dub/" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="dub_secrets.xml" />
+        <exclude domain="file" path="models/" />
+        <exclude domain="file" path="dub/" />
+    </device-transfer>
+</data-extraction-rules>

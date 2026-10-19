@@ -15,6 +15,7 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.cutviet.editor.media.VoiceEngine
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -66,7 +67,7 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         } catch (e: Exception) {
             return Result.failure(error("Lồng tiếng thất bại: ${e.message}"))
         } finally {
-            withContext(Dispatchers.Main) { voice.shutdown() }
+            withContext(NonCancellable + Dispatchers.Main) { voice.shutdown() }
         }
     }
 
@@ -169,7 +170,7 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
     }
 }
 
-/** Chooses the speech-to-text and translation engines. Translation is filled in by the next steps (Gemma, Gemini). */
+/** Chooses the offline speech-to-text and translation engines. */
 object Engines {
     fun speechToText(context: Context, workDir: File, startMs: Long, endMs: Long): SpeechToText {
         val model = DubModel.WHISPER_LARGE_V3
@@ -182,8 +183,14 @@ object Engines {
         return WhisperAsr(context, model.file(context), workDir, startMs, endMs)
     }
 
-    fun translator(context: Context): TextTranslator = object : TextTranslator {
-        override suspend fun translate(segments: List<SpeechSegment>, language: SourceLanguage, progress: (Float) -> Unit) =
-            throw StepUnavailableException("Chưa có bộ dịch (Gemma đang được làm)")
+    fun translator(context: Context): TextTranslator {
+        val model = DubModel.GEMMA_3N_E4B
+        if (!model.isReady(context)) {
+            return object : TextTranslator {
+                override suspend fun translate(segments: List<SpeechSegment>, language: SourceLanguage, progress: (Float) -> Unit) =
+                    throw StepUnavailableException("Chưa tải model dịch (${model.label})")
+            }
+        }
+        return GemmaTranslator(context, model.file(context))
     }
 }

@@ -34,12 +34,24 @@ enum class DubModel(
     val repo: String,
     val path: String,
     val approxBytes: Long,
+    /** Needs a Hugging Face token whose account accepted the model's licence. */
+    val gated: Boolean,
 ) {
     WHISPER_LARGE_V3(
         label = "Nhận dạng giọng nói (Whisper large-v3, Q5)",
         repo = "ggerganov/whisper.cpp",
         path = "ggml-large-v3-q5_0.bin",
         approxBytes = 1_080_000_000L,
+        gated = false,
+    ),
+
+    /** Google's on-device Gemma build for MediaPipe; owner picked it on 2026-10-19. */
+    GEMMA_3N_E4B(
+        label = "Dịch offline (Gemma 3n E4B, int4)",
+        repo = "google/gemma-3n-E4B-it-litert-preview",
+        path = "gemma-3n-E4B-it-int4.task",
+        approxBytes = 4_400_000_000L,
+        gated = true,
     );
 
     fun file(context: Context) = File(ModelStore.dir(context), path)
@@ -88,12 +100,14 @@ class ModelDownloadWorker(context: Context, params: WorkerParameters) : Coroutin
             var done = part.length()
             if (done < size) {
                 val conn = (URL(model.url).openConnection() as HttpURLConnection).apply {
+                    authorize(model)
                     connectTimeout = 20_000
                     readTimeout = 60_000
                     instanceFollowRedirects = true
                     if (done > 0) setRequestProperty("Range", "bytes=$done-")
                 }
                 val code = conn.responseCode
+                if (code == 401 || code == 403) return@withContext Result.failure(workDataOf(KEY_ERROR to denied(model)))
                 if (code != 200 && code != 206) return@withContext retryOrFail("HTTP $code")
                 if (code == 200) done = 0 // server ignored the range: start over
                 conn.inputStream.use { input ->
@@ -125,11 +139,24 @@ class ModelDownloadWorker(context: Context, params: WorkerParameters) : Coroutin
             target.delete()
             if (!part.renameTo(target)) return@withContext Result.failure(workDataOf(KEY_ERROR to "Không lưu được model"))
             Result.success()
+        } catch (e: DeniedException) {
+            Result.failure(workDataOf(KEY_ERROR to denied(model)))
         } catch (e: java.io.IOException) {
             Log.w(TAG, "download ${model.name}", e)
             retryOrFail(e.message ?: "network")
         }
     }
+
+    private class DeniedException : java.io.IOException("denied")
+
+    private fun HttpURLConnection.authorize(model: DubModel) {
+        val token = DubSettings(applicationContext).hfToken
+        if (model.gated && token.isNotBlank()) setRequestProperty("Authorization", "Bearer $token")
+    }
+
+    private fun denied(model: DubModel): String =
+        if (DubSettings(applicationContext).hfToken.isBlank()) "Model này cần token Hugging Face. Hãy dán token trong Cài đặt lồng tiếng."
+        else "Hugging Face từ chối tải. Hãy mở trang ${model.repo} bằng tài khoản của token và bấm đồng ý giấy phép."
 
     private fun retryOrFail(reason: String): Result {
         Log.w(TAG, "download failed: $reason (attempt $runAttemptCount)")
@@ -140,8 +167,10 @@ class ModelDownloadWorker(context: Context, params: WorkerParameters) : Coroutin
     /** SHA-256 and size of the file as listed by the Hugging Face API. */
     private fun expected(model: DubModel): Pair<String, Long> {
         val conn = URL("https://huggingface.co/api/models/${model.repo}/tree/main").openConnection() as HttpURLConnection
+        conn.authorize(model)
         conn.connectTimeout = 20_000
         conn.readTimeout = 30_000
+        if (conn.responseCode == 401 || conn.responseCode == 403) throw DeniedException()
         val arr = JSONArray(conn.inputStream.bufferedReader().use { it.readText() })
         for (i in 0 until arr.length()) {
             val o = arr.getJSONObject(i)

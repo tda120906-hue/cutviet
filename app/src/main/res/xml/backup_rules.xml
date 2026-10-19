@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 and older. Keeps keys and multi-GB models out of backups. -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="dub_secrets.xml" />
+    <exclude domain="file" path="models/" />
+    <exclude domain="file" path="dub/" />
+</full-backup-content>

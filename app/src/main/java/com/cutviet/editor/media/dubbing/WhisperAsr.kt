@@ -10,7 +10,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.io.File
-import kotlin.concurrent.thread
 import kotlin.coroutines.resume
 
 /** JNI entry points of libcutviet_whisper.so (src/main/cpp/whisper_jni.cpp). */
@@ -71,7 +70,7 @@ class WhisperAsr(
         // cancel (which only asks whisper to stop) can never free it while it is still in use.
         return suspendCancellableCoroutine { cont ->
             cont.invokeOnCancellation { WhisperNative.abort(handle) }
-            thread(name = "whisper", stackSize = 8L shl 20) {
+            Thread(null, {
                 val t1 = SystemClock.elapsedRealtime()
                 val result = try {
                     WhisperNative.transcribe(handle, pcm.absolutePath, language.code, language.initialPrompt, threads()) { onPercent(it) }
@@ -83,7 +82,7 @@ class WhisperAsr(
                     if (result != null) cont.resume(result)
                     else cont.resumeWith(Result.failure(StepUnavailableException("Nhận dạng giọng nói thất bại")))
                 }
-            }
+            }, "whisper", 8L shl 20).start()
         }
     }
 
