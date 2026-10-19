@@ -83,6 +83,29 @@ object ProjectOps {
      * Moves an overlay up (+1) or down (-1) in the stack. Later overlays are drawn on top. Returns
      * [p] itself when it is already at the top/bottom.
      */
+    /** One dubbed sentence: where it was spoken in the clip's source, and its audio file. */
+    data class DubLine(val sourceStartMs: Long, val uri: String, val durationMs: Long, val text: String)
+
+    /**
+     * Puts dubbed sentences of clip [index] on the timeline as DUB tracks (replacing earlier dubs of
+     * that clip's span) and sets the clip's own sound to [originalVolume] (0 mutes it, 0.2 ducks it).
+     * Sentences outside the clip's trim are dropped.
+     */
+    fun applyDub(p: Project, index: Int, lines: List<DubLine>, originalVolume: Float): Project {
+        val c = p.clips.getOrNull(index) ?: return p
+        val clipStart = p.clipStartMs(index)
+        val clipEnd = clipStart + c.durationMs
+        val tracks = lines.filter { it.sourceStartMs in c.trimStartMs until c.trimEndMs && it.durationMs > 0 }.map {
+            AudioTrack(
+                kind = AudioKind.DUB, uri = it.uri, name = it.text.trim().take(40), sourceDurationMs = it.durationMs,
+                startMs = clipStart + ((it.sourceStartMs - c.trimStartMs) / c.speed).toLong(),
+            )
+        }
+        val kept = p.audios.filterNot { it.kind == AudioKind.DUB && it.startMs in clipStart until clipEnd }
+        val clips = p.clips.toMutableList().also { it[index] = c.copy(volume = originalVolume.coerceIn(0f, 2f)) }
+        return p.copy(clips = clips, audios = kept + tracks)
+    }
+
     fun restackOverlay(p: Project, id: String, delta: Int): Project {
         val i = p.overlays.indexOfFirst { it.id == id }
         if (i < 0) return p

@@ -135,6 +135,8 @@ enum class AudioKind(val label: String) {
     MUSIC("Nhạc"),
     EXTRACTED("Âm thanh tách"),
     VOICE("Giọng đọc"),
+    /** One translated, dubbed sentence (made by the dubbing job). */
+    DUB("Lồng tiếng"),
 }
 
 /** Settings used to generate a text-to-speech track, kept so it can be edited and regenerated. */
