@@ -4,3 +4,6 @@
 -dontwarn org.checkerframework.**
 -dontwarn com.google.errorprone.**
 -dontwarn javax.annotation.**
+# Called from whisper_jni.cpp by name.
+-keep class com.cutviet.editor.media.dubbing.WhisperNative$Listener { *; }
+-keep class com.cutviet.editor.media.dubbing.WhisperNative { native <methods>; }

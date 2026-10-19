@@ -47,7 +47,7 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
             if (!ready) return Result.failure(error("Máy chưa có giọng đọc tiếng Việt"))
 
             val pipeline = DubbingPipeline(
-                asr = Engines.speechToText(applicationContext),
+                asr = Engines.speechToText(applicationContext, dir, inputData.getLong(KEY_START, 0), inputData.getLong(KEY_END, 0)),
                 translator = Engines.translator(applicationContext),
                 voice = voice,
                 workDir = dir,
@@ -114,6 +114,8 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         const val KEY_SOURCE = "source"
         const val KEY_LANGUAGE = "language"
         const val KEY_VOICE = "voice"
+        const val KEY_START = "startMs"
+        const val KEY_END = "endMs"
         const val KEY_STEP = "step"
         const val KEY_PROGRESS = "progress"
         const val KEY_ERROR = "error"
@@ -123,9 +125,15 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         /** One dubbing job at a time. */
         const val UNIQUE_NAME = "dubbing"
 
-        fun enqueue(context: Context, sourceUri: String, language: SourceLanguage, voiceName: String?): java.util.UUID {
+        /** Dubs [startMs]..[endMs] of the source (its trimmed part on the timeline). */
+        fun enqueue(context: Context, sourceUri: String, startMs: Long, endMs: Long, language: SourceLanguage, voiceName: String?): java.util.UUID {
             val req = OneTimeWorkRequestBuilder<DubbingWorker>()
-                .setInputData(workDataOf(KEY_SOURCE to sourceUri, KEY_LANGUAGE to language.name, KEY_VOICE to voiceName))
+                .setInputData(
+                    workDataOf(
+                        KEY_SOURCE to sourceUri, KEY_START to startMs, KEY_END to endMs,
+                        KEY_LANGUAGE to language.name, KEY_VOICE to voiceName,
+                    ),
+                )
                 .build()
             WorkManager.getInstance(context).enqueueUniqueWork(UNIQUE_NAME, ExistingWorkPolicy.KEEP, req)
             return req.id
@@ -161,11 +169,17 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
     }
 }
 
-/** Chooses the speech-to-text and translation engines. Filled in by the next steps (Whisper, Gemma, Gemini). */
+/** Chooses the speech-to-text and translation engines. Translation is filled in by the next steps (Gemma, Gemini). */
 object Engines {
-    fun speechToText(context: Context): SpeechToText = object : SpeechToText {
-        override suspend fun transcribe(sourceUri: String, language: SourceLanguage, progress: (Float) -> Unit) =
-            throw StepUnavailableException("Chưa có bộ nhận dạng giọng nói (Whisper đang được làm)")
+    fun speechToText(context: Context, workDir: File, startMs: Long, endMs: Long): SpeechToText {
+        val model = DubModel.WHISPER_LARGE_V3
+        if (!model.isReady(context)) {
+            return object : SpeechToText {
+                override suspend fun transcribe(sourceUri: String, language: SourceLanguage, progress: (Float) -> Unit) =
+                    throw StepUnavailableException("Chưa tải model nhận dạng giọng nói (${model.label})")
+            }
+        }
+        return WhisperAsr(context, model.file(context), workDir, startMs, endMs)
     }
 
     fun translator(context: Context): TextTranslator = object : TextTranslator {

@@ -16,6 +16,23 @@ android {
         targetSdk = 36
         versionCode = (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1)
         versionName = "1.0." + (System.getenv("GITHUB_RUN_NUMBER") ?: "0")
+        ndk {
+            // Native code (whisper.cpp) is built for 64-bit ARM only: the owner's OnePlus 13 and
+            // every current phone. Other devices still run the app, without offline dubbing.
+            abiFilters += "arm64-v8a"
+        }
+        externalNativeBuild {
+            cmake {
+                arguments += listOf("-DCMAKE_BUILD_TYPE=Release")
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     signingConfigs {
@@ -84,4 +101,6 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.10.0")
 
     testImplementation("junit:junit:4.13.2")
+    // Real org.json for unit tests (android.jar only has stubs).
+    testImplementation("org.json:json:20240303")
 }

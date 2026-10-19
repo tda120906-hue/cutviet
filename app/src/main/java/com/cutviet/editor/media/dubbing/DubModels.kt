@@ -15,8 +15,13 @@ enum class DubMode(val label: String) {
     OFFLINE("Offline"),
 }
 
-/** A piece of speech in the source, with its place on the source timeline. */
-data class SpeechSegment(val startMs: Long, val endMs: Long, val text: String) {
+/** One recognised word with its time in the source, in ms. */
+data class Word(val startMs: Long, val endMs: Long, val text: String) {
+    fun shifted(ms: Long) = copy(startMs = startMs + ms, endMs = endMs + ms)
+}
+
+/** A sentence of speech in the source, with its place on the source timeline and its words. */
+data class SpeechSegment(val startMs: Long, val endMs: Long, val text: String, val words: List<Word> = emptyList()) {
     val slotMs: Long get() = (endMs - startMs).coerceAtLeast(0)
 }
 

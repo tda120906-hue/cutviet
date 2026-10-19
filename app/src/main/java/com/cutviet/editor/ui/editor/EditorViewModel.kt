@@ -573,7 +573,7 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
             return
         }
         val app = getApplication<Application>()
-        val jobId = DubbingWorker.enqueue(app, clip.uri, language, voiceName)
+        val jobId = DubbingWorker.enqueue(app, clip.uri, clip.trimStartMs, clip.trimEndMs, language, voiceName)
         val clipId = clip.id
         dubStatus = "Đang chuẩn bị lồng tiếng…"
         viewModelScope.launch {
