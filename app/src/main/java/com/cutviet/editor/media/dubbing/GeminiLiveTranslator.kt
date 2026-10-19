@@ -127,6 +127,7 @@ class GeminiLiveTranslator(
         val slot = r.endMs - r.startMs
         // No TTS rate to tune here: a dub that runs long is played up to 1.15x faster instead.
         val speed = if (slot > 0) (ms.toFloat() / slot).coerceIn(1f, AudioFitter.MAX_RATE) else 1f
+        Log.i(TAG, "segment $index measured=${ms}ms slot=${slot}ms speed=$speed")
         return DubbedSegment(r.startMs + offsetMs, slot, "", text.toString().trim(), file, ms, 1f, speed)
     }
 

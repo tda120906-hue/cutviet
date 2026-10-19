@@ -114,6 +114,7 @@ class DubbingPipeline(
         } ?: return null
         val file = files[fit.rate] ?: lastFile ?: return null
         files.values.filter { it != file }.forEach { it.delete() }
+        Log.i(TAG, "segment $index rate=${fit.rate} measured=${fit.durationMs}ms slot=${seg.slotMs}ms attempts=${fit.attempts}")
         if (!fit.withinTolerance) Log.w(TAG, "segment $index off by ${fit.durationMs - seg.slotMs} ms at rate ${fit.rate}")
         return DubbedSegment(seg.startMs, seg.slotMs, seg.text, line, file, fit.durationMs, fit.rate)
     }

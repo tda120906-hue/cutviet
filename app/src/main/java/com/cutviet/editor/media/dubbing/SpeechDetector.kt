@@ -2,6 +2,7 @@ package com.cutviet.editor.media.dubbing
 
 import kotlin.math.log10
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.sqrt
 
 /**
@@ -28,9 +29,13 @@ object SpeechDetector {
             for (k in i * frame until (i + 1) * frame) s += samples[k].toDouble() * samples[k]
             20 * log10(max(sqrt(s / frame), 1e-6))
         }
-        // Noise floor: the 10th percentile of frame levels.
-        val floor = db.sorted()[n / 10]
-        val threshold = max(-50.0, floor + 12.0)
+        // Noise floor: the 10th percentile of frame levels. When someone talks through almost the
+        // whole clip that percentile is speech too, so the threshold also stays 20 dB under the
+        // loud frames (95th percentile).
+        val sorted = db.sorted()
+        val floor = sorted[n / 10]
+        val loud = sorted[n * 95 / 100]
+        val threshold = max(-50.0, min(floor + 12.0, loud - 20.0))
         val voiced = BooleanArray(n) { db[it] > threshold }
 
         val raw = ArrayList<IntRange>()
