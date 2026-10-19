@@ -30,12 +30,16 @@ import java.security.MessageDigest
 /** On-device models used by dubbing, stored in filesDir/models/. */
 enum class DubModel(
     val label: String,
-    /** Hugging Face repo and file; the SHA-256 is read from the repo's file list and checked after download. */
+    /**
+     * Hugging Face repo and file; the SHA-256 is read from the repo's file list and checked after
+     * download. An empty repo means [directUrl] is used and only the size is checked.
+     */
     val repo: String,
     val path: String,
     val approxBytes: Long,
     /** Needs a Hugging Face token whose account accepted the model's licence. */
     val gated: Boolean,
+    val directUrl: String? = null,
 ) {
     WHISPER_LARGE_V3(
         label = "Nhận dạng giọng nói (Whisper large-v3, Q5)",
@@ -52,11 +56,21 @@ enum class DubModel(
         path = "gemma-3n-E4B-it-int4.task",
         approxBytes = 4_400_000_000L,
         gated = true,
+    ),
+
+    /** UVR's MDX-Net vocal model (MIT licence), published on the UVR model repo's GitHub releases. */
+    MDX_VOC_FT(
+        label = "Tách giọng nói khỏi tạp âm (MDX-Net Voc FT)",
+        repo = "",
+        path = "UVR-MDX-NET-Voc_FT.onnx",
+        approxBytes = 66_000_000L,
+        gated = false,
+        directUrl = "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/UVR-MDX-NET-Voc_FT.onnx",
     );
 
     fun file(context: Context) = File(ModelStore.dir(context), path)
     fun isReady(context: Context) = file(context).let { it.exists() && it.length() > approxBytes / 2 }
-    val url: String get() = "https://huggingface.co/$repo/resolve/main/$path"
+    val url: String get() = directUrl ?: "https://huggingface.co/$repo/resolve/main/$path"
 }
 
 object ModelStore {
@@ -132,7 +146,7 @@ class ModelDownloadWorker(context: Context, params: WorkerParameters) : Coroutin
             }
             if (part.length() != size) return@withContext retryOrFail("incomplete ${part.length()}/$size")
             setForeground(info(model, 1f, verifying = true))
-            if (!sha256(part).equals(sha, ignoreCase = true)) {
+            if (sha != null && !sha256(part).equals(sha, ignoreCase = true)) {
                 part.delete()
                 return@withContext Result.failure(workDataOf(KEY_ERROR to "Tệp tải về bị lỗi (sai mã kiểm tra), hãy tải lại"))
             }
@@ -164,8 +178,20 @@ class ModelDownloadWorker(context: Context, params: WorkerParameters) : Coroutin
         else Result.failure(workDataOf(KEY_ERROR to "Tải model thất bại: $reason"))
     }
 
-    /** SHA-256 and size of the file as listed by the Hugging Face API. */
-    private fun expected(model: DubModel): Pair<String, Long> {
+    /** SHA-256 (when published) and size of the file. */
+    private fun expected(model: DubModel): Pair<String?, Long> {
+        if (model.repo.isEmpty()) {
+            val head = (URL(model.url).openConnection() as HttpURLConnection).apply {
+                requestMethod = "HEAD"
+                instanceFollowRedirects = true
+                connectTimeout = 20_000
+                readTimeout = 30_000
+            }
+            val size = head.contentLengthLong
+            head.disconnect()
+            if (size <= 0) throw java.io.IOException("no size for ${model.path}")
+            return null to size
+        }
         val conn = URL("https://huggingface.co/api/models/${model.repo}/tree/main").openConnection() as HttpURLConnection
         conn.authorize(model)
         conn.connectTimeout = 20_000

@@ -6,16 +6,18 @@ import com.cutviet.editor.media.VoiceEngine
 import java.io.File
 
 /**
- * Runs speech to text → translation → fitted text to speech for the audio of one source file.
- * Each step reports its own time to the log ("CutVietDub").
+ * Runs voice separation → speech to text → translation → fitted text to speech → loudness
+ * normalisation for [startMs]..[endMs] of one source file. Each step logs its time ("CutVietDub").
  */
 class DubbingPipeline(
+    private val separator: VoiceSeparator?,
     private val asr: SpeechToText,
     private val translator: TextTranslator,
     private val voice: VoiceEngine,
     private val workDir: File,
 ) {
     enum class Step(val label: String) {
+        SEPARATE("Đang tách giọng"),
         RECOGNIZE("Đang nhận dạng"),
         TRANSLATE("Đang dịch"),
         SPEAK("Đang tạo giọng"),
@@ -24,22 +26,30 @@ class DubbingPipeline(
 
     data class Settings(val language: SourceLanguage, val voiceName: String?, val pitch: Float = 1f)
 
+    class Output(val segments: List<DubbedSegment>, val stems: Stems?, val gain: Float)
+
     /** Time spent in each step, in ms. */
     val timings = linkedMapOf<Step, Long>()
 
-    suspend fun run(sourceUri: String, settings: Settings, progress: (Step, Float) -> Unit): List<DubbedSegment> {
+    suspend fun run(sourceUri: String, startMs: Long, endMs: Long, settings: Settings, progress: (Step, Float) -> Unit): Output {
         workDir.mkdirs()
+        val stems = separator?.let { sep ->
+            timed(Step.SEPARATE) { sep.separate(sourceUri, startMs, endMs) { progress(Step.SEPARATE, it) } }
+        }
+        // Listen to the separated voice when there is one: no music or noise for Whisper to mishear.
+        val source = if (stems != null) AudioSource(android.net.Uri.fromFile(stems.voice).toString(), 0, 0, startMs)
+        else AudioSource(sourceUri, startMs, endMs, 0)
         val segments = timed(Step.RECOGNIZE) {
-            asr.transcribe(sourceUri, settings.language) { progress(Step.RECOGNIZE, it) }
+            asr.transcribe(source, settings.language) { progress(Step.RECOGNIZE, it) }
         }.filter { it.text.isNotBlank() && it.slotMs > 0 }
-        if (segments.isEmpty()) return emptyList()
+        if (segments.isEmpty()) return Output(emptyList(), stems, 1f)
 
         val texts = timed(Step.TRANSLATE) {
             translator.translate(segments, settings.language) { progress(Step.TRANSLATE, it) }
         }
         require(texts.size == segments.size) { "translator returned ${texts.size} of ${segments.size} lines" }
 
-        return timed(Step.SPEAK) {
+        val dubbed = timed(Step.SPEAK) {
             val out = ArrayList<DubbedSegment>()
             segments.forEachIndexed { i, seg ->
                 progress(Step.SPEAK, i.toFloat() / segments.size)
@@ -47,6 +57,11 @@ class DubbingPipeline(
             }
             out
         }
+        val gain = timed(Step.MERGE) {
+            progress(Step.MERGE, 0f)
+            Loudness.gainTo(TARGET_LUFS, dubbed.map { it.file })
+        }
+        return Output(dubbed, stems, gain)
     }
 
     private suspend fun speak(index: Int, seg: SpeechSegment, text: String, s: Settings): DubbedSegment? {
@@ -78,5 +93,7 @@ class DubbingPipeline(
 
     companion object {
         const val TAG = "CutVietDub"
+        /** Loudness of the Vietnamese voice (EBU R128 streaming level). */
+        const val TARGET_LUFS = -16.0
     }
 }

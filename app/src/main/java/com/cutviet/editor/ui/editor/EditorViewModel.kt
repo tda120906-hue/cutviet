@@ -589,18 +589,25 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
                 dubStatus = null
                 when (info.state) {
                     WorkInfo.State.SUCCEEDED -> {
-                        val segments = withContext(Dispatchers.IO) {
+                        val result = withContext(Dispatchers.IO) {
                             runCatching { DubbingWorker.decode(DubbingWorker.resultFile(app, jobId.toString()).readText()) }.getOrNull()
                         }
                         val at = project.clips.indexOfFirst { it.id == clipId }
-                        if (segments == null || at < 0) {
+                        if (result == null || at < 0) {
                             toast = "Không đọc được kết quả lồng tiếng."
                         } else {
-                            val lines = segments.map {
+                            val lines = result.segments.map {
                                 ProjectOps.DubLine(it.startMs, Uri.fromFile(it.file).toString(), it.durationMs, it.text)
                             }
-                            commit(ProjectOps.applyDub(project, at, lines, originalVolume))
-                            toast = "Đã lồng tiếng ${lines.size} câu."
+                            val stems = result.stems?.let {
+                                ProjectOps.DubStems(
+                                    Uri.fromFile(it.voice).toString(), Uri.fromFile(it.background).toString(),
+                                    result.sourceStartMs, it.durationMs,
+                                )
+                            }
+                            commit(ProjectOps.applyDub(project, at, lines, originalVolume, stems, result.gain))
+                            toast = if (stems != null) "Đã lồng tiếng ${lines.size} câu, giữ nguyên âm thanh nền."
+                            else "Đã lồng tiếng ${lines.size} câu. Chưa có model tách giọng nên tiếng gốc chỉ được giảm cả đoạn."
                         }
                     }
                     WorkInfo.State.FAILED -> toast = info.outputData.getString(DubbingWorker.KEY_ERROR) ?: "Lồng tiếng thất bại."

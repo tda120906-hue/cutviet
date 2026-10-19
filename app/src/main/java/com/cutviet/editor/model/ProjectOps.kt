@@ -87,23 +87,53 @@ object ProjectOps {
     data class DubLine(val sourceStartMs: Long, val uri: String, val durationMs: Long, val text: String)
 
     /**
-     * Puts dubbed sentences of clip [index] on the timeline as DUB tracks (replacing earlier dubs of
-     * that clip's span) and sets the clip's own sound to [originalVolume] (0 mutes it, 0.2 ducks it).
-     * Sentences outside the clip's trim are dropped.
+     * The clip's sound split in two: [voiceUri] and [backgroundUri] start at [sourceStartMs] of the
+     * clip's source and last [durationMs]; together they equal the original sound.
      */
-    fun applyDub(p: Project, index: Int, lines: List<DubLine>, originalVolume: Float): Project {
+    data class DubStems(val voiceUri: String, val backgroundUri: String, val sourceStartMs: Long, val durationMs: Long)
+
+    /**
+     * Puts dubbed sentences of clip [index] on the timeline as DUB tracks at [dubVolume], replacing
+     * an earlier dub of that clip. With [stems] the clip is muted and its background plays at full
+     * volume with the original voice at [originalVolume] (0 removes it); without, the whole clip's
+     * sound is set to [originalVolume]. Sentences outside the clip's trim are dropped.
+     */
+    fun applyDub(
+        p: Project, index: Int, lines: List<DubLine>, originalVolume: Float,
+        stems: DubStems? = null, dubVolume: Float = 1f,
+    ): Project {
         val c = p.clips.getOrNull(index) ?: return p
         val clipStart = p.clipStartMs(index)
         val clipEnd = clipStart + c.durationMs
+        fun timelineAt(sourceMs: Long) = clipStart + ((sourceMs - c.trimStartMs) / c.speed).toLong()
         val tracks = lines.filter { it.sourceStartMs in c.trimStartMs until c.trimEndMs && it.durationMs > 0 }.map {
             AudioTrack(
                 kind = AudioKind.DUB, uri = it.uri, name = it.text.trim().take(40), sourceDurationMs = it.durationMs,
-                startMs = clipStart + ((it.sourceStartMs - c.trimStartMs) / c.speed).toLong(),
+                startMs = timelineAt(it.sourceStartMs), volume = dubVolume.coerceIn(0f, 4f),
             )
         }
-        val kept = p.audios.filterNot { it.kind == AudioKind.DUB && it.startMs in clipStart until clipEnd }
-        val clips = p.clips.toMutableList().also { it[index] = c.copy(volume = originalVolume.coerceIn(0f, 2f)) }
-        return p.copy(clips = clips, audios = kept + tracks)
+        val stemTracks = stems?.let { st ->
+            // The stems cover the clip's trim; play them at the clip's speed so they stay in sync.
+            val from = (c.trimStartMs - st.sourceStartMs).coerceIn(0, st.durationMs)
+            val to = (c.trimEndMs - st.sourceStartMs).coerceIn(from, st.durationMs)
+            val start = timelineAt(st.sourceStartMs + from)
+            listOf(
+                AudioTrack(
+                    kind = AudioKind.BACKGROUND, uri = st.backgroundUri, name = "Nền: ${c.uri.substringAfterLast('/').take(30)}",
+                    sourceDurationMs = st.durationMs, sourceStartMs = from, sourceEndMs = to, startMs = start, speed = c.speed,
+                ),
+                AudioTrack(
+                    kind = AudioKind.SOURCE_VOICE, uri = st.voiceUri, name = "Giọng gốc: ${c.uri.substringAfterLast('/').take(30)}",
+                    sourceDurationMs = st.durationMs, sourceStartMs = from, sourceEndMs = to, startMs = start, speed = c.speed,
+                    volume = originalVolume.coerceIn(0f, 2f),
+                ),
+            )
+        }.orEmpty()
+        val replaced = setOf(AudioKind.DUB, AudioKind.BACKGROUND, AudioKind.SOURCE_VOICE)
+        val kept = p.audios.filterNot { it.kind in replaced && it.startMs in clipStart until clipEnd }
+        val clipVolume = if (stems != null) 0f else originalVolume.coerceIn(0f, 2f)
+        val clips = p.clips.toMutableList().also { it[index] = c.copy(volume = clipVolume) }
+        return p.copy(clips = clips, audios = kept + stemTracks + tracks)
     }
 
     fun restackOverlay(p: Project, id: String, delta: Int): Project {

@@ -23,3 +23,8 @@ jobs:
 
       - name: Compile release
         run: ./gradlew --no-daemon assembleRelease
+
+      - name: Show APK size and native libraries
+        run: |
+          ls -l app/build/outputs/apk/release/*.apk
+          unzip -l app/build/outputs/apk/release/*.apk | grep '\.so$' || true

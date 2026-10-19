@@ -36,9 +36,15 @@ data class DubbedSegment(
     val rate: Float,
 )
 
-/** Speech to text with segment timestamps, reading the audio of a video or audio file. */
+/**
+ * Audio to listen to: [startMs]..[endMs] of [uri] (0..0 = all of it). Times found in it are moved
+ * by [offsetMs] so they land on the clip's source timeline.
+ */
+data class AudioSource(val uri: String, val startMs: Long, val endMs: Long, val offsetMs: Long)
+
+/** Speech to text with segment timestamps. */
 interface SpeechToText {
-    suspend fun transcribe(sourceUri: String, language: SourceLanguage, progress: (Float) -> Unit): List<SpeechSegment>
+    suspend fun transcribe(source: AudioSource, language: SourceLanguage, progress: (Float) -> Unit): List<SpeechSegment>
 }
 
 /** Text translation into Vietnamese, given the neighbouring sentences as context. */

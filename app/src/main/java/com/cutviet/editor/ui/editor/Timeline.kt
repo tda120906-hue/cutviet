@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Translate
+import androidx.compose.material.icons.filled.Landscape
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.material3.Icon
@@ -198,6 +199,8 @@ fun Timeline(
                                 AudioKind.EXTRACTED -> Color(0xFF2F4F7A)
                                 AudioKind.VOICE -> Color(0xFF8A4A1F)
                                 AudioKind.DUB -> Color(0xFF6A2F7A)
+                                AudioKind.BACKGROUND -> Color(0xFF3F5A3A)
+                                AudioKind.SOURCE_VOICE -> Color(0xFF5A4A3A)
                             },
                             label = (if (a.speed != 1f) formatSpeed(a.speed) + " · " else "") + a.name,
                             icon = when (a.kind) {
@@ -205,6 +208,8 @@ fun Timeline(
                                 AudioKind.EXTRACTED -> Icons.Filled.GraphicEq
                                 AudioKind.VOICE -> Icons.Filled.RecordVoiceOver
                                 AudioKind.DUB -> Icons.Filled.Translate
+                                AudioKind.BACKGROUND -> Icons.Filled.Landscape
+                                AudioKind.SOURCE_VOICE -> Icons.Filled.RecordVoiceOver
                             },
                             selected = vm.selectedAudioId == a.id,
                             onClick = { vm.selectAudio(a.id) },

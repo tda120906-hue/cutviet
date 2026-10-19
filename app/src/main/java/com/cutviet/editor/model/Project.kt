@@ -137,6 +137,10 @@ enum class AudioKind(val label: String) {
     VOICE("Giọng đọc"),
     /** One translated, dubbed sentence (made by the dubbing job). */
     DUB("Lồng tiếng"),
+    /** A clip's sound without its voice (noise, objects, ambience, music), from voice separation. */
+    BACKGROUND("Nền (đã tách giọng)"),
+    /** A clip's original voice, separated from the background; turned down or off under a dub. */
+    SOURCE_VOICE("Giọng gốc"),
 }
 
 /** Settings used to generate a text-to-speech track, kept so it can be edited and regenerated. */

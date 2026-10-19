@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.content.Context
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
@@ -47,19 +48,32 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
             } ?: false
             if (!ready) return Result.failure(error("Máy chưa có giọng đọc tiếng Việt"))
 
+            val sourceStart = inputData.getLong(KEY_START, 0)
+            val sourceEnd = inputData.getLong(KEY_END, 0)
             val pipeline = DubbingPipeline(
-                asr = Engines.speechToText(applicationContext, dir, inputData.getLong(KEY_START, 0), inputData.getLong(KEY_END, 0)),
+                separator = Engines.separator(applicationContext, dir),
+                asr = Engines.speechToText(applicationContext, dir),
                 translator = Engines.translator(applicationContext),
                 voice = voice,
                 workDir = dir,
             )
-            val segments = pipeline.run(source, DubbingPipeline.Settings(language, inputData.getString(KEY_VOICE))) { step, p ->
-                setProgressAsync(workDataOf(KEY_STEP to step.name, KEY_PROGRESS to p))
-                notify(step.label, p)
+            var lastStep: DubbingPipeline.Step? = null
+            var lastPercent = -1
+            val out = pipeline.run(source, sourceStart, sourceEnd, DubbingPipeline.Settings(language, inputData.getString(KEY_VOICE))) { step, p ->
+                // Only report whole-percent changes: the system drops notifications sent too often.
+                val percent = (p * 100).toInt()
+                if (step != lastStep || percent != lastPercent) {
+                    lastStep = step
+                    lastPercent = percent
+                    setProgressAsync(workDataOf(KEY_STEP to step.name, KEY_PROGRESS to p))
+                    notify(step.label, p)
+                }
             }
-            if (segments.isEmpty()) return Result.failure(error("Không nghe thấy lời nói nào trong video"))
-            resultFile(applicationContext, id.toString()).writeText(encode(segments, pipeline.timings).toString())
-            return Result.success(workDataOf(KEY_COUNT to segments.size))
+            val timings = pipeline.timings.entries.joinToString { "${it.key.name}=${it.value}ms" }
+            Log.i(DubbingPipeline.TAG, "job ${id}: ${out.segments.size} lines, separated=${out.stems != null}, $timings")
+            if (out.segments.isEmpty()) return Result.failure(error("Không nghe thấy lời nói nào trong video"))
+            resultFile(applicationContext, id.toString()).writeText(encode(out, sourceStart, pipeline.timings).toString())
+            return Result.success(workDataOf(KEY_COUNT to out.segments.size, KEY_SEPARATED to (out.stems != null)))
         } catch (e: StepUnavailableException) {
             return Result.failure(error(e.message ?: "Bước này chưa dùng được trên máy"))
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -121,6 +135,7 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         const val KEY_PROGRESS = "progress"
         const val KEY_ERROR = "error"
         const val KEY_COUNT = "count"
+        const val KEY_SEPARATED = "separated"
         private const val CHANNEL = "dubbing"
         private const val NOTIFICATION_ID = 4107
         /** One dubbing job at a time. */
@@ -143,10 +158,13 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         fun jobDir(context: Context, jobId: String) = File(File(context.filesDir, "dub"), jobId)
         fun resultFile(context: Context, jobId: String) = File(jobDir(context, jobId), "result.json")
 
-        fun encode(segments: List<DubbedSegment>, timings: Map<DubbingPipeline.Step, Long>): JSONObject =
+        /** What a finished job hands back to the editor. */
+        class JobResult(val segments: List<DubbedSegment>, val stems: Stems?, val sourceStartMs: Long, val gain: Float)
+
+        fun encode(out: DubbingPipeline.Output, sourceStartMs: Long, timings: Map<DubbingPipeline.Step, Long>): JSONObject =
             JSONObject().apply {
                 put("segments", JSONArray().apply {
-                    segments.forEach { s ->
+                    out.segments.forEach { s ->
                         put(JSONObject().apply {
                             put("startMs", s.startMs); put("slotMs", s.slotMs)
                             put("sourceText", s.sourceText); put("text", s.text)
@@ -154,33 +172,51 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                         })
                     }
                 })
+                out.stems?.let { st ->
+                    put("stems", JSONObject().apply {
+                        put("voice", st.voice.absolutePath); put("background", st.background.absolutePath); put("durationMs", st.durationMs)
+                    })
+                }
+                put("sourceStartMs", sourceStartMs)
+                put("gain", out.gain.toDouble())
                 put("timings", JSONObject().apply { timings.forEach { (k, v) -> put(k.name, v) } })
             }
 
-        fun decode(json: String): List<DubbedSegment> {
-            val arr = JSONObject(json).getJSONArray("segments")
-            return (0 until arr.length()).map { i ->
+        fun decode(json: String): JobResult {
+            val root = JSONObject(json)
+            val arr = root.getJSONArray("segments")
+            val segments = (0 until arr.length()).map { i ->
                 val o = arr.getJSONObject(i)
                 DubbedSegment(
                     o.getLong("startMs"), o.getLong("slotMs"), o.getString("sourceText"), o.getString("text"),
                     File(o.getString("file")), o.getLong("durationMs"), o.getDouble("rate").toFloat(),
                 )
             }
+            val stems = root.optJSONObject("stems")?.let {
+                Stems(File(it.getString("voice")), File(it.getString("background")), it.getLong("durationMs"))
+            }
+            return JobResult(segments, stems, root.optLong("sourceStartMs"), root.optDouble("gain", 1.0).toFloat())
         }
     }
 }
 
 /** Chooses the offline speech-to-text and translation engines. */
 object Engines {
-    fun speechToText(context: Context, workDir: File, startMs: Long, endMs: Long): SpeechToText {
+    /** Null when the separation model is not downloaded: the dub then only turns the whole clip down. */
+    fun separator(context: Context, workDir: File): VoiceSeparator? {
+        val model = DubModel.MDX_VOC_FT
+        return if (model.isReady(context)) VoiceSeparator(context, model.file(context), workDir) else null
+    }
+
+    fun speechToText(context: Context, workDir: File): SpeechToText {
         val model = DubModel.WHISPER_LARGE_V3
         if (!model.isReady(context)) {
             return object : SpeechToText {
-                override suspend fun transcribe(sourceUri: String, language: SourceLanguage, progress: (Float) -> Unit) =
+                override suspend fun transcribe(source: AudioSource, language: SourceLanguage, progress: (Float) -> Unit) =
                     throw StepUnavailableException("Chưa tải model nhận dạng giọng nói (${model.label})")
             }
         }
-        return WhisperAsr(context, model.file(context), workDir, startMs, endMs)
+        return WhisperAsr(context, model.file(context), workDir)
     }
 
     fun translator(context: Context): TextTranslator {

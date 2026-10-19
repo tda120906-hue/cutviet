@@ -7,3 +7,9 @@
 # Called from whisper_jni.cpp by name.
 -keep class com.cutviet.editor.media.dubbing.WhisperNative$Listener { *; }
 -keep class com.cutviet.editor.media.dubbing.WhisperNative { native <methods>; }
+# ONNX Runtime and MediaPipe GenAI call into Java from native code and load protos reflectively.
+-keep class ai.onnxruntime.** { *; }
+-keep class com.google.mediapipe.** { *; }
+-keep class com.google.protobuf.** { *; }
+-dontwarn com.google.mediapipe.**
+-dontwarn com.google.protobuf.**

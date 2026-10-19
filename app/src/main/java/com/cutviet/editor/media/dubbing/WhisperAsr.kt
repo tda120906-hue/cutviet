@@ -28,26 +28,24 @@ object WhisperNative {
 }
 
 /**
- * Offline speech recognition with whisper.cpp. Decodes the source's audio (only the [startMs] to
- * [endMs] range) to 16 kHz PCM, runs Whisper with the language fixed, and returns sentences with
- * word timestamps on the source's timeline.
+ * Offline speech recognition with whisper.cpp. Decodes the audio to 16 kHz PCM, runs Whisper with
+ * the language fixed, and returns sentences with word timestamps on the clip's source timeline.
+ * It listens to the separated voice when there is one, which keeps noise and music out of it.
  */
 class WhisperAsr(
     private val context: Context,
     private val model: File,
     private val workDir: File,
-    private val startMs: Long,
-    private val endMs: Long,
 ) : SpeechToText {
 
-    override suspend fun transcribe(sourceUri: String, language: SourceLanguage, progress: (Float) -> Unit): List<SpeechSegment> {
+    override suspend fun transcribe(source: AudioSource, language: SourceLanguage, progress: (Float) -> Unit): List<SpeechSegment> {
         if (!WhisperNative.available) throw StepUnavailableException("Máy này không chạy được Whisper (cần chip arm64)")
         if (!model.exists()) throw StepUnavailableException("Chưa tải model nhận dạng giọng nói")
         val pcm = File(workDir, "audio_16k.f32")
         val t0 = SystemClock.elapsedRealtime()
         val ctx = currentCoroutineContext()
         withContext(Dispatchers.IO) {
-            AudioPcmDecoder.decode(context, Uri.parse(sourceUri), startMs, endMs, pcm, { progress(it * 0.1f) }, { !ctx.isActive })
+            AudioPcmDecoder.decode(context, Uri.parse(source.uri), source.startMs, source.endMs, pcm, { progress(it * 0.1f) }, { !ctx.isActive })
         }
         Log.i(TAG, "decode ${SystemClock.elapsedRealtime() - t0} ms, ${pcm.length() / 4 / AudioPcmDecoder.SAMPLE_RATE} s of audio")
 
@@ -57,7 +55,7 @@ class WhisperAsr(
             pcm.delete()
         }
         val words = WhisperTranscript.words(WhisperTranscript.parseTokens(json))
-        return WhisperTranscript.sentences(words, offsetMs = startMs)
+        return WhisperTranscript.sentences(words, offsetMs = source.offsetMs)
     }
 
     private suspend fun runWhisper(pcm: File, language: SourceLanguage, onPercent: (Int) -> Unit): String {
