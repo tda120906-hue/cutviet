@@ -69,7 +69,8 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
             )
             var lastStep: DubbingPipeline.Step? = null
             var lastPercent = -1
-            val out = pipeline.run(source, sourceStart, sourceEnd, DubbingPipeline.Settings(language, inputData.getString(KEY_VOICE))) { step, p ->
+            val settings = DubbingPipeline.Settings(language, inputData.getString(KEY_VOICE), distinguish = DubSettings(applicationContext).distinguishSpeakers)
+            val out = pipeline.run(source, sourceStart, sourceEnd, settings) { step, p ->
                 // Only report whole-percent changes: the system drops notifications sent too often.
                 val percent = (p * 100).toInt()
                 if (step != lastStep || percent != lastPercent) {
@@ -81,13 +82,14 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                 }
             }
             val timings = pipeline.timings.entries.joinToString { "${it.key.name}=${it.value}ms" }
-            DubLog.i(DubbingPipeline.TAG, "job $id done: ${out.segments.size} lines, separated=${out.stems != null}, online=${out.usedOnline}, fallback=${out.fallbackReason}, $timings")
+            DubLog.i(DubbingPipeline.TAG, "job $id done: ${out.segments.size} lines, separated=${out.stems != null}, online=${out.usedOnline}, fallback=${out.fallbackReason}, notice=${out.notice}, $timings")
             if (out.segments.isEmpty()) return fail("Không nghe thấy lời nói nào trong video")
             resultFile(applicationContext, id.toString()).writeText(encode(out, sourceStart, pipeline.timings).toString())
             return Result.success(
                 workDataOf(
                     KEY_COUNT to out.segments.size, KEY_SEPARATED to (out.stems != null),
-                    KEY_ONLINE to out.usedOnline, KEY_FALLBACK to out.fallbackReason,
+                    KEY_ONLINE to out.usedOnline, KEY_FALLBACK to out.fallbackReason, KEY_NOTE to out.notice,
+                    KEY_SPEAKERS to out.segments.mapNotNull { it.speaker }.distinct().size,
                 ),
             )
         } catch (e: StepUnavailableException) {
@@ -161,8 +163,10 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         const val KEY_SEPARATED = "separated"
         const val KEY_ONLINE = "online"
         const val KEY_FALLBACK = "fallback"
-        /** Progress: set once the online branch gave up and offline is running. */
+        /** Progress: set once the online branch gave up and offline is running. Result: notice for the user. */
         const val KEY_NOTE = "note"
+        /** Result: how many distinct voices the dub uses (0 when speakers were not told apart). */
+        const val KEY_SPEAKERS = "speakers"
         private const val CHANNEL = "dubbing"
         private const val NOTIFICATION_ID = 4107
         /** One dubbing job at a time. */
@@ -209,6 +213,7 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                             put("sourceText", s.sourceText); put("text", s.text)
                             put("file", s.file.absolutePath); put("durationMs", s.durationMs); put("rate", s.rate.toDouble())
                             put("playbackSpeed", s.playbackSpeed.toDouble())
+                            s.speaker?.let { put("speaker", it) }
                         })
                     }
                 })
@@ -231,6 +236,7 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                     o.getLong("startMs"), o.getLong("slotMs"), o.getString("sourceText"), o.getString("text"),
                     File(o.getString("file")), o.getLong("durationMs"), o.getDouble("rate").toFloat(),
                     o.optDouble("playbackSpeed", 1.0).toFloat(),
+                    o.optString("speaker").takeIf { it.isNotEmpty() },
                 )
             }
             val stems = root.optJSONObject("stems")?.let {
@@ -247,14 +253,18 @@ object Engines {
      * Router for the online branch. Offline: never. Online first: whenever a key is set and the phone
      * is online. Auto: online on Wi-Fi, or on mobile data when the offline models are missing.
      */
-    fun online(context: Context, workDir: File): GeminiLiveTranslator? {
+    fun online(context: Context, workDir: File): OnlineDubber? {
         val s = DubSettings(context)
-        fun skip(why: String): GeminiLiveTranslator? {
+        fun skip(why: String): OnlineDubber? {
             DubLog.i(DubbingPipeline.TAG, "online not used: $why")
             return null
         }
+        fun dubber(simulate: Boolean = false): OnlineDubber = when (s.onlineEngine) {
+            OnlineEngine.NATURAL -> GeminiDubber(GeminiApi(s.geminiKey, simulate), s.geminiTextModel, s.geminiTtsModel, workDir, s.distinguishSpeakers)
+            OnlineEngine.LIVE -> GeminiLiveTranslator(s.geminiKey, s.geminiModel, workDir, simulate)
+        }
         if (s.mode == DubMode.OFFLINE) return skip("mode Offline")
-        if (s.simulateQuota) return GeminiLiveTranslator(s.geminiKey, s.geminiModel, workDir, simulateQuota = true)
+        if (s.simulateQuota) return dubber(simulate = true)
         if (s.geminiKey.isBlank()) return skip("no Gemini key")
         val cm = context.getSystemService(android.net.ConnectivityManager::class.java)
         val caps = cm?.getNetworkCapabilities(cm.activeNetwork) ?: return skip("no network")
@@ -266,7 +276,7 @@ object Engines {
             DubMode.AUTO -> unmetered || !offlineReady
             DubMode.OFFLINE -> false
         }
-        return if (use) GeminiLiveTranslator(s.geminiKey, s.geminiModel, workDir) else skip("Auto on mobile data with offline models ready")
+        return if (use) dubber() else skip("Auto on mobile data with offline models ready")
     }
 
     /** Null when the separation model is not downloaded: the dub then only turns the whole clip down. */

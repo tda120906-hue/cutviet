@@ -83,8 +83,11 @@ object ProjectOps {
      * Moves an overlay up (+1) or down (-1) in the stack. Later overlays are drawn on top. Returns
      * [p] itself when it is already at the top/bottom.
      */
-    /** One dubbed sentence: where it was spoken in the clip's source, and its audio file. */
-    data class DubLine(val sourceStartMs: Long, val uri: String, val durationMs: Long, val text: String, val speed: Float = 1f)
+    /**
+     * One dubbed sentence: where it was spoken in the clip's source, and its audio file. [speaker]
+     * ("Nam 1") prefixes the track's name when speakers were told apart.
+     */
+    data class DubLine(val sourceStartMs: Long, val uri: String, val durationMs: Long, val text: String, val speed: Float = 1f, val speaker: String? = null)
 
     /**
      * The clip's sound split in two: [voiceUri] and [backgroundUri] start at [sourceStartMs] of the
@@ -108,7 +111,7 @@ object ProjectOps {
         fun timelineAt(sourceMs: Long) = clipStart + ((sourceMs - c.trimStartMs) / c.speed).toLong()
         val tracks = lines.filter { it.sourceStartMs in c.trimStartMs until c.trimEndMs && it.durationMs > 0 }.map {
             AudioTrack(
-                kind = AudioKind.DUB, uri = it.uri, name = it.text.trim().take(40), sourceDurationMs = it.durationMs,
+                kind = AudioKind.DUB, uri = it.uri, name = (it.speaker?.let { s -> "$s: " }.orEmpty() + it.text.trim()).take(40), sourceDurationMs = it.durationMs,
                 startMs = timelineAt(it.sourceStartMs), volume = dubVolume.coerceIn(0f, 4f), speed = it.speed.coerceIn(0.5f, 2f),
             )
         }

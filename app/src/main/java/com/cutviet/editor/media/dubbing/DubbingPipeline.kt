@@ -10,8 +10,8 @@ import java.io.File
  */
 class DubbingPipeline(
     private val separator: VoiceSeparator?,
-    /** Online speech-to-speech; when it fails the offline engines take over. */
-    private val online: GeminiLiveTranslator?,
+    /** Online dubbing; when it fails the offline engines take over. */
+    private val online: OnlineDubber?,
     private val context: android.content.Context,
     private val asr: SpeechToText,
     private val translator: TextTranslator,
@@ -27,9 +27,18 @@ class DubbingPipeline(
         MERGE("Đang ghép"),
     }
 
-    data class Settings(val language: SourceLanguage, val voiceName: String?, val pitch: Float = 1f)
+    /** [distinguish]: tell speakers apart (offline: men, women and children by the pitch of their voice). */
+    data class Settings(val language: SourceLanguage, val voiceName: String?, val pitch: Float = 1f, val distinguish: Boolean = false)
 
-    class Output(val segments: List<DubbedSegment>, val stems: Stems?, val gain: Float, val usedOnline: Boolean, val fallbackReason: String?)
+    class Output(
+        val segments: List<DubbedSegment>,
+        val stems: Stems?,
+        val gain: Float,
+        val usedOnline: Boolean,
+        val fallbackReason: String?,
+        /** Something the user should know about a dub that went through. */
+        val notice: String? = null,
+    )
 
     /** Time spent in each step, in ms. */
     val timings = linkedMapOf<Step, Long>()
@@ -41,7 +50,7 @@ class DubbingPipeline(
 
     suspend fun run(sourceUri: String, startMs: Long, endMs: Long, settings: Settings, progress: (Step, Float) -> Unit): Output {
         workDir.mkdirs()
-        DubLog.i(TAG, "start ${endMs - startMs} ms of audio, ${settings.language}, online=${online != null}, separation=${separator != null}, ${DubLog.memory(context)}")
+        DubLog.i(TAG, "start ${endMs - startMs} ms of audio, ${settings.language}, online=${online?.javaClass?.simpleName}, separation=${separator != null}, distinguish=${settings.distinguish}, ${DubLog.memory(context)}")
         val stems = separator?.let { sep ->
             timed(Step.SEPARATE, progress) { sep.separate(sourceUri, startMs, endMs) { progress(Step.SEPARATE, it) } }
         }
@@ -51,10 +60,10 @@ class DubbingPipeline(
 
         if (online != null) {
             try {
-                val dubbed = timed(Step.ONLINE, progress) { runOnline(online, source) { progress(Step.ONLINE, it) } }
+                val dubbed = timed(Step.ONLINE, progress) { runOnline(online, source, settings) { progress(Step.ONLINE, it) } }
                 val gain = timed(Step.MERGE, progress) { Loudness.gainTo(TARGET_LUFS, dubbed.map { it.file }) }
-                DubLog.i(TAG, "online done: ${dubbed.size} lines")
-                return Output(dubbed, stems, gain, usedOnline = true, fallbackReason = null)
+                DubLog.i(TAG, "online done: ${dubbed.size} lines, ${dubbed.mapNotNull { it.speaker }.distinct().size} voices, notice=${online.notice}")
+                return Output(dubbed, stems, gain, usedOnline = true, fallbackReason = null, notice = online.notice)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -73,6 +82,9 @@ class DubbingPipeline(
         DubLog.i(TAG, "recognized ${segments.size} sentences")
         if (segments.isEmpty()) return Output(emptyList(), stems, 1f, false, fallback)
 
+        // Men, women and children told apart by pitch, each read at a pitch of their own.
+        val genders: List<Gender?> = if (settings.distinguish) speakerGenders(source, segments) else segments.map { null }
+
         // Each line may use the silence after its sentence; the translation is asked to fit that
         // time at this voice's real speed.
         val room = roomFor(segments.map { it.startMs to it.slotMs }, endMs)
@@ -87,7 +99,8 @@ class DubbingPipeline(
                 val out = ArrayList<DubbedSegment>()
                 segments.forEachIndexed { i, seg ->
                     progress(Step.SPEAK, i.toFloat() / segments.size)
-                    speak(i, seg, texts[i].trim(), room[i], settings)?.let(out::add)
+                    val g = genders[i]
+                    speak(i, seg, texts[i].trim(), room[i], settings.forGender(g))?.copy(speaker = g?.label)?.let(out::add)
                 }
                 out
             }
@@ -100,21 +113,55 @@ class DubbingPipeline(
         return Output(dubbed, stems, gain, false, fallback)
     }
 
-    private suspend fun runOnline(gemini: GeminiLiveTranslator, source: AudioSource, progress: (Float) -> Unit): List<DubbedSegment> {
-        val pcm = File(workDir, "online_16k.f32")
-        val job = kotlinx.coroutines.currentCoroutineContext()
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            AudioPcmDecoder.decode(context, android.net.Uri.parse(source.uri), source.startMs, source.endMs, pcm, { progress(it * 0.1f) }, {
-                job[kotlinx.coroutines.Job]?.isActive == false
-            })
-        }
-        val voice = readFloats(pcm).also { pcm.delete() }
+    private suspend fun runOnline(dubber: OnlineDubber, source: AudioSource, s: Settings, progress: (Float) -> Unit): List<DubbedSegment> {
+        val voice = decode16k(source) { progress(it * 0.1f) }
         val ranges = SpeechDetector.detect(voice, AudioPcmDecoder.SAMPLE_RATE)
         DubLog.i(TAG, "online: ${ranges.size} speech segments")
         if (ranges.isEmpty()) throw OnlineUnavailableException("Không tìm thấy đoạn lời nói nào để gửi online")
-        val dubbed = gemini.dub(voice, ranges, source.offsetMs) { progress(0.1f + 0.9f * it) }
-        if (dubbed.isEmpty()) throw OnlineUnavailableException("Gemini không trả về giọng dịch nào")
-        return dubbed
+        val lines = dubber.dub(voice, ranges, s.language) { progress(0.1f + 0.85f * it) }
+        if (lines.isEmpty()) throw OnlineUnavailableException(dubber.notice ?: "Gemini không trả về giọng dịch nào")
+        // Lines translated online but not voiced (quota) are read by the phone, at the pitch of the speaker.
+        val out = ArrayList<DubbedSegment>()
+        lines.forEachIndexed { i, l ->
+            val start = l.startMs + source.offsetMs
+            val slot = l.endMs - l.startMs
+            val file = l.file
+            if (file != null) {
+                out += DubbedSegment(start, slot, l.source, l.text, file, l.durationMs, 1f, l.speed, l.speaker)
+            } else {
+                val seg = SpeechSegment(start, start + slot, l.source)
+                val g = if (s.distinguish) l.gender else null
+                speak(i, seg, l.text, l.roomMs, s.forGender(g), reword = false)?.copy(speaker = l.speaker)?.let(out::add)
+            }
+            progress(0.95f + 0.05f * (i + 1) / lines.size)
+        }
+        return out
+    }
+
+    /** [source] as 16 kHz mono floats. */
+    private suspend fun decode16k(source: AudioSource, progress: (Float) -> Unit): FloatArray {
+        val pcm = File(workDir, "voice_16k.f32")
+        val job = kotlinx.coroutines.currentCoroutineContext()
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            AudioPcmDecoder.decode(context, android.net.Uri.parse(source.uri), source.startMs, source.endMs, pcm, progress, {
+                job[kotlinx.coroutines.Job]?.isActive == false
+            })
+        }
+        return readFloats(pcm).also { pcm.delete() }
+    }
+
+    /** Man, woman or child for each recognised sentence, from the pitch of the voice. */
+    private suspend fun speakerGenders(source: AudioSource, segments: List<SpeechSegment>): List<Gender?> {
+        val t0 = SystemClock.elapsedRealtime()
+        val voice = decode16k(source) {}
+        val rate = AudioPcmDecoder.SAMPLE_RATE
+        val out = segments.map { seg ->
+            val from = ((seg.startMs - source.offsetMs) * rate / 1000).toInt()
+            val to = ((seg.endMs - source.offsetMs) * rate / 1000).toInt()
+            PitchTracker.medianF0(voice, rate, from, to)?.let(PitchTracker::gender)
+        }
+        DubLog.i(TAG, "speakers by pitch in ${SystemClock.elapsedRealtime() - t0} ms: " + out.groupingBy { it?.label ?: "?" }.eachCount())
+        return out
     }
 
     private fun readFloats(f: File): FloatArray {
@@ -123,14 +170,14 @@ class DubbingPipeline(
         return FloatArray(fb.remaining()).also { fb.get(it) }
     }
 
-    /** Speaks one line into its time; a line still too long at 1.15x is reworded shorter once. */
-    private suspend fun speak(index: Int, seg: SpeechSegment, text: String, roomMs: Long, s: Settings): DubbedSegment? {
+    /** Speaks one line into its time; a line still too long at 1.15x is reworded shorter once ([reword]). */
+    private suspend fun speak(index: Int, seg: SpeechSegment, text: String, roomMs: Long, s: Settings, reword: Boolean = true): DubbedSegment? {
         if (text.isEmpty()) return null
         // One sentence is far below the engine's input limit; cut defensively anyway.
         var line = text.take(voice.maxInputLength)
         var best = render(index, 0, line, seg.slotMs, roomMs, s) ?: return null
         val limit = AudioFitter.upper(seg.slotMs, roomMs)
-        if (best.fit.durationMs > limit) {
+        if (reword && best.fit.durationMs > limit) {
             val syllables = VoiceEngine.syllableCount(line)
             val target = (syllables * limit.toDouble() / best.fit.durationMs * 0.9).toInt().coerceAtLeast(1)
             val shorter = translator.shorten(seg.text, line, s.language, target)?.take(voice.maxInputLength)
@@ -192,8 +239,18 @@ class DubbingPipeline(
         }
     }
 
+    private fun Settings.forGender(g: Gender?) = if (g == null) this else copy(pitch = (pitch * pitchFor(g)).coerceIn(0.6f, 1.7f))
+
     companion object {
         const val TAG = "CutVietDub"
+
+        /** Pitch on top of the chosen voice for a man, a woman or a child, so they sound apart. */
+        fun pitchFor(g: Gender?): Float = when (g) {
+            Gender.MALE -> 0.78f
+            Gender.FEMALE -> 1.05f
+            Gender.CHILD -> 1.3f
+            null -> 1f
+        }
         private const val CALIBRATION = "Xin chào các bạn, hôm nay chúng ta cùng nhau nói về một chuyện rất thú vị."
         /** Kept free before the next line starts. */
         const val GAP_MS = 80L

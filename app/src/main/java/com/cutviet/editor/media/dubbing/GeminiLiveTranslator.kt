@@ -20,7 +20,7 @@ import java.nio.ByteOrder
 import java.util.concurrent.TimeUnit
 
 /** The online branch could not run (no key, quota, network); the job falls back to offline. */
-class OnlineUnavailableException(message: String) : Exception(message)
+open class OnlineUnavailableException(message: String) : Exception(message)
 
 /**
  * Online speech-to-speech dubbing with Gemini Live Translate over the Live API WebSocket. The
@@ -28,7 +28,7 @@ class OnlineUnavailableException(message: String) : Exception(message)
  * speaks the Vietnamese translation as it goes. Each detected speech segment of the separated
  * voice is streamed in real time, followed by a little silence, and the speech that comes back
  * until the model falls quiet becomes that segment's dub. The API key is the one the owner typed
- * in the app's settings.
+ * in the app's settings. One voice for everyone; [GeminiDubber] tells speakers apart.
  */
 class GeminiLiveTranslator(
     private val apiKey: String,
@@ -36,19 +36,19 @@ class GeminiLiveTranslator(
     private val workDir: File,
     /** Fail as if the quota ran out (settings test switch). */
     private val simulateQuota: Boolean = false,
-) {
+) : OnlineDubber {
     private val client = OkHttpClient.Builder()
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .pingInterval(20, TimeUnit.SECONDS)
         .build()
 
-    /** [voice] is 16 kHz mono; returns one dubbed segment per range that produced speech. */
-    suspend fun dub(
+    /** [voice] is 16 kHz mono; returns one line per range that produced speech. */
+    override suspend fun dub(
         voice: FloatArray,
         ranges: List<SpeechDetector.Range>,
-        offsetMs: Long,
+        language: SourceLanguage,
         progress: (Float) -> Unit,
-    ): List<DubbedSegment> {
+    ): List<OnlineLine> {
         if (simulateQuota) {
             DubLog.w(TAG, "simulated 429 from settings")
             throw OnlineUnavailableException("Gemini báo hết hạn mức (429, giả lập)")
@@ -56,10 +56,10 @@ class GeminiLiveTranslator(
         if (apiKey.isBlank()) throw OnlineUnavailableException("Chưa nhập khoá Gemini")
         val room = DubbingPipeline.roomFor(ranges.map { it.startMs to (it.endMs - it.startMs) }, voice.size / 16L)
         try {
-            val out = ArrayList<DubbedSegment>()
+            val out = ArrayList<OnlineLine>()
             var next = 0
             while (next < ranges.size) {
-                next = session(voice, ranges, room, next, offsetMs, out) { done -> progress(done.toFloat() / ranges.size) }
+                next = session(voice, ranges, room, next, out) { done -> progress(done.toFloat() / ranges.size) }
             }
             return out
         } finally {
@@ -77,8 +77,7 @@ class GeminiLiveTranslator(
         ranges: List<SpeechDetector.Range>,
         room: List<Long>,
         from: Int,
-        offsetMs: Long,
-        out: MutableList<DubbedSegment>,
+        out: MutableList<OnlineLine>,
         onDone: (Int) -> Unit,
     ): Int {
         val inbox = Channel<JSONObject>(Channel.UNLIMITED)
@@ -121,7 +120,7 @@ class GeminiLiveTranslator(
                 val r = ranges[i]
                 val heard = Heard()
                 segment(ws, inbox, failure, voice, r, heard)
-                heard.toSegment(i, r, room[i], offsetMs)?.let(out::add)
+                heard.toLine(i, r, room[i])?.let(out::add)
                 streamedMs += r.endMs - r.startMs + TAIL_MS
                 i++
                 onDone(i)
@@ -168,7 +167,7 @@ class GeminiLiveTranslator(
             if (sc.optBoolean("turnComplete") || sc.optBoolean("generationComplete")) complete = true
         }
 
-        fun toSegment(index: Int, r: SpeechDetector.Range, roomMs: Long, offsetMs: Long): DubbedSegment? {
+        fun toLine(index: Int, r: SpeechDetector.Range, roomMs: Long): OnlineLine? {
             val total = samples.sumOf { it.size }
             val slot = r.endMs - r.startMs
             if (total == 0) {
@@ -186,7 +185,7 @@ class GeminiLiveTranslator(
             // No TTS rate to tune here: a dub that runs past the next line is played up to 1.15x faster.
             val speed = if (roomMs > 0) (ms.toFloat() / roomMs).coerceIn(1f, AudioFitter.MAX_RATE) else 1f
             DubLog.i(TAG, "segment $index measured=${ms}ms slot=${slot}ms room=${roomMs}ms speed=$speed")
-            return DubbedSegment(r.startMs + offsetMs, slot, source.toString().trim(), text.toString().trim(), file, ms, 1f, speed)
+            return OnlineLine(r.startMs, r.endMs, roomMs, source.toString().trim(), text.toString().trim(), null, null, file, ms, speed)
         }
     }
 

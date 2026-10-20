@@ -632,7 +632,7 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
             return
         }
         val lines = result.segments.map {
-            ProjectOps.DubLine(it.startMs, Uri.fromFile(it.file).toString(), it.durationMs, it.text, it.playbackSpeed)
+            ProjectOps.DubLine(it.startMs, Uri.fromFile(it.file).toString(), it.durationMs, it.text, it.playbackSpeed, it.speaker)
         }
         val stems = result.stems?.let {
             ProjectOps.DubStems(Uri.fromFile(it.voice).toString(), Uri.fromFile(it.background).toString(), result.sourceStartMs, it.durationMs)
@@ -643,7 +643,10 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
             append("Đã lồng tiếng ${lines.size} câu")
             append(if (info.outputData.getBoolean(DubbingWorker.KEY_ONLINE, false)) " (online)" else " (offline)")
             append(if (stems != null) ", giữ nguyên âm thanh nền." else ". Chưa có model tách giọng nên tiếng gốc chỉ được giảm cả đoạn.")
+            val voices = info.outputData.getInt(DubbingWorker.KEY_SPEAKERS, 0)
+            if (voices > 1) append(" Có $voices giọng khác nhau, tên mỗi track ghi ai nói.")
             if (fallback != null) append(" Online lỗi nên đã chuyển offline: $fallback")
+            info.outputData.getString(DubbingWorker.KEY_NOTE)?.let { append(" Lưu ý: $it.") }
         }
     }
 

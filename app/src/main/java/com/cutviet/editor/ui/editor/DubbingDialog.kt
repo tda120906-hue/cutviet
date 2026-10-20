@@ -62,6 +62,7 @@ import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.cutviet.editor.media.dubbing.DubLog
 import com.cutviet.editor.media.dubbing.DubMode
+import com.cutviet.editor.media.dubbing.OnlineEngine
 import com.cutviet.editor.media.dubbing.DubModel
 import com.cutviet.editor.media.dubbing.DubSettings
 import com.cutviet.editor.media.dubbing.ModelDownloadWorker
@@ -109,6 +110,8 @@ private fun DubTab(vm: EditorViewModel, settings: DubSettings, onOpenModels: () 
     val context = LocalContext.current
     var language by remember { mutableStateOf(SourceLanguage.ENGLISH) }
     var mode by remember { mutableStateOf(settings.mode) }
+    var engine by remember { mutableStateOf(settings.onlineEngine) }
+    var distinguish by remember { mutableStateOf(settings.distinguishSpeakers) }
     var original by remember { mutableFloatStateOf(settings.originalVolume) }
     val voices = vm.voice.voices.value
     var voiceName by remember { mutableStateOf(voices.firstOrNull { !it.needsNetwork }?.name ?: voices.firstOrNull()?.name) }
@@ -137,11 +140,41 @@ private fun DubTab(vm: EditorViewModel, settings: DubSettings, onOpenModels: () 
         color = TextDim, fontSize = 12.sp,
     )
 
+    if (mode != DubMode.OFFLINE) {
+        Label("Kiểu lồng tiếng online")
+        Chips(OnlineEngine.entries, engine, { it.label }) { engine = it; settings.onlineEngine = it }
+        Text(
+            when (engine) {
+                OnlineEngine.NATURAL -> "Gemini 3.8 nghe cả đoạn, nhận ra từng người nói (nam, nữ, trẻ em) và giọng điệu của họ, dịch cho vừa thời gian, rồi đọc bằng giọng tự nhiên. Dùng lượt miễn phí trong ngày của khoá; hết lượt thì các câu còn lại đọc bằng giọng của máy."
+                OnlineEngine.LIVE -> "Gemini Live Translate phiên dịch theo thời gian thực bằng một giọng chung. Nhanh, nhưng giọng đều đều và không phân biệt người nói."
+            },
+            color = TextDim, fontSize = 12.sp,
+        )
+    }
+
+    Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Phân biệt giọng từng người", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Text(
+                if (mode != DubMode.OFFLINE && engine == OnlineEngine.NATURAL) {
+                    "Mỗi người một giọng riêng đúng giới tính. Offline chỉ phân biệt được nam, nữ và trẻ em theo độ cao của giọng."
+                } else {
+                    "Offline: nam, nữ và trẻ em đọc ở độ cao giọng khác nhau, đoán theo giọng gốc."
+                },
+                color = TextDim, fontSize = 12.sp,
+            )
+        }
+        Switch(checked = distinguish, onCheckedChange = { distinguish = it; settings.distinguishSpeakers = it })
+    }
+
     Label("Giọng tiếng Việt")
     if (voices.isEmpty()) {
         Text("Máy chưa có giọng đọc tiếng Việt. Cài Google Text-to-Speech và tải giọng tiếng Việt.", color = Color(0xFFFF6B6B), fontSize = 13.sp)
     } else {
         Chips(voices, voices.firstOrNull { it.name == voiceName }, { it.label + if (it.needsNetwork) " (mạng)" else "" }) { voiceName = it.name }
+        if (mode != DubMode.OFFLINE && engine == OnlineEngine.NATURAL) {
+            Text("Dùng khi chạy offline, hoặc cho các câu Gemini không đọc được.", color = TextDim, fontSize = 12.sp)
+        }
     }
 
     Label("Giọng gốc: ${if (original == 0f) "xoá hẳn" else "${(original * 100).toInt()}%"}")
@@ -190,6 +223,8 @@ private fun ModelsTab(settings: DubSettings) {
     var hf by remember { mutableStateOf(settings.hfToken) }
     var key by remember { mutableStateOf(settings.geminiKey) }
     var model by remember { mutableStateOf(settings.geminiModel) }
+    var textModel by remember { mutableStateOf(settings.geminiTextModel) }
+    var ttsModel by remember { mutableStateOf(settings.geminiTtsModel) }
     var simulate by remember { mutableStateOf(settings.simulateQuota) }
     val notify = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
@@ -208,7 +243,12 @@ private fun ModelsTab(settings: DubSettings) {
     Label("Khoá API Gemini (nhánh online)")
     Text("Khoá chỉ lưu trong máy này, không nằm trong APK và không vào bản sao lưu.", color = TextDim, fontSize = 12.sp)
     Secret(key) { key = it; settings.geminiKey = it }
-    Label("Model Gemini Live")
+    Label("Model nghe & dịch (kiểu Tự nhiên)")
+    OutlinedTextField(value = textModel, onValueChange = { textModel = it; settings.geminiTextModel = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    Label("Model đọc (kiểu Tự nhiên)")
+    OutlinedTextField(value = ttsModel, onValueChange = { ttsModel = it; settings.geminiTtsModel = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    Text("Để trống là dùng model mặc định. Xem lượt miễn phí còn lại ở aistudio.google.com/rate-limit.", color = TextDim, fontSize = 12.sp)
+    Label("Model Gemini Live (kiểu Phiên dịch trực tiếp)")
     OutlinedTextField(value = model, onValueChange = { model = it; settings.geminiModel = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
