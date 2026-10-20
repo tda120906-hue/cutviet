@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.SystemClock
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -86,6 +87,29 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
 
     /** Whether layers dragged on the timeline snap to clip edges, the playhead and other layers. */
     var snapEnabled by mutableStateOf(true)
+
+    /** Set when the editor moves the playhead itself; the timeline then scrolls to [playheadJumpMs]. */
+    var playheadJumps by mutableIntStateOf(0)
+        private set
+    var playheadJumpMs = 0L
+        private set
+
+    /** Whether the finger is moving the timeline (the preview then shows a big time label). */
+    var scrubbing by mutableStateOf(false)
+        private set
+
+    /**
+     * A clip edge being dragged on the timeline. [gapMs]: how much the left edge has moved in, kept
+     * as a gap so the rest of the clip stays under the finger; [edgeSourceMs]: the new first (or
+     * last) moment of the source video; [stopped]: the edge reached the playhead and stops there.
+     */
+    class Trim(val clipId: String, val atStart: Boolean, val gapMs: Long, val edgeSourceMs: Long, val durationMs: Long, val stopped: Boolean)
+
+    var trim by mutableStateOf<Trim?>(null)
+        private set
+    private var trimOrigin: Project? = null
+    private var trimIndex = 0
+    private var trimStop: Long? = null
 
     /** Clip being edited in the full-screen crop editor, if any. */
     var cropClipId by mutableStateOf<String?>(null)
@@ -504,6 +528,91 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
             commit(ProjectOps.updateOverlay(project, overlayId) { it.copy(eraseMask = file.absolutePath) })
         }
     }
+
+    fun setTimelineScrubbing(on: Boolean) {
+        if (scrubbing == on) return
+        scrubbing = on
+        preview.setScrubbing("timeline", on)
+    }
+
+    /**
+     * Starts dragging an edge of main-track clip [index]. The preview gets the clip's whole source
+     * on that side, so it can show each frame the edge passes, in or out, while the finger moves.
+     * With snapping on, a left edge stops at the playhead when the playhead is inside the clip.
+     */
+    fun beginTrim(index: Int, atStart: Boolean) {
+        val c = project.clips.getOrNull(index) ?: return
+        beginDrag()
+        val start = project.clipStartMs(index)
+        trimOrigin = project
+        trimIndex = index
+        trimStop = if (snapEnabled && atStart && playheadMs > start && playheadMs < start + c.durationMs) playheadMs else null
+        trim = Trim(c.id, atStart, 0, if (atStart) c.trimStartMs else c.trimEndMs, c.durationMs, false)
+        if (!c.isImage) {
+            val open = ProjectOps.updateClip(project, index) { if (atStart) it.copy(trimStartMs = 0) else it.copy(trimEndMs = it.sourceDurationMs) }
+            preview.setScrubbing("trim", true)
+            preview.setProject(open, immediate = true, positionMs = trimFrameMs(c, start, c, atStart))
+        }
+    }
+
+    /** Moves the dragged edge [deltaMs] (timeline time) from where it was when the drag began. */
+    fun trimTo(deltaMs: Long, snapMs: Long) {
+        val origin = trimOrigin ?: return
+        val c = origin.clips.getOrNull(trimIndex) ?: return
+        val atStart = trim?.atStart ?: return
+        val start = origin.clipStartMs(trimIndex)
+        val snapTo = if (snapEnabled) buildList {
+            add(playheadMs)
+            origin.overlays.forEach { add(it.startMs); add(it.endMs) }
+        } else emptyList()
+        val clip = if (atStart) ProjectOps.trimClipStart(c, start, deltaMs, trimStop, snapTo, snapMs)
+        else ProjectOps.trimClipEnd(c, start, deltaMs, snapTo, snapMs)
+        val gap = if (atStart) (c.durationMs - clip.durationMs).coerceAtLeast(0) else 0
+        trim = Trim(
+            c.id, atStart, gap, if (atStart) clip.trimStartMs else clip.trimEndMs, clip.durationMs,
+            stopped = trimStop?.let { start + gap >= it - 1 } ?: false,
+        )
+        val p = ProjectOps.updateClip(origin, trimIndex) { clip }
+        if (p != project) {
+            if (dragPending) {
+                dragPending = false
+                pushHistory()
+            }
+            project = p.copy(updatedAt = System.currentTimeMillis())
+            scheduleSave()
+        }
+        if (!c.isImage) preview.seekTo(trimFrameMs(c, start, clip, atStart))
+    }
+
+    /** Ends an edge drag: the preview plays the trimmed project again, from the same frame as before. */
+    fun endTrim() {
+        val t = trim ?: return
+        val origin = trimOrigin
+        trim = null
+        trimOrigin = null
+        trimStop = null
+        preview.setScrubbing("trim", false)
+        val start = origin?.clipStartMs(trimIndex) ?: 0L
+        val removed = if (t.atStart && origin != null) (origin.clips.getOrNull(trimIndex)?.durationMs ?: 0L) - t.durationMs else 0L
+        val at = ProjectOps.playheadAfterStartTrim(playheadMs, start, removed).coerceIn(0, project.durationMs)
+        preview.setProject(project, immediate = true, positionMs = at)
+        jumpPlayhead(at)
+    }
+
+    /** Moves the playhead to [ms] and scrolls the timeline there. */
+    fun jumpPlayhead(ms: Long) {
+        playheadMs = ms
+        playheadJumpMs = ms
+        playheadJumps++
+    }
+
+    /**
+     * Where the frame at the dragged edge of [now] sits in the preview's project, in which [was]
+     * (starting at [startMs]) is opened to the start or end of its source.
+     */
+    private fun trimFrameMs(was: Clip, startMs: Long, now: Clip, atStart: Boolean): Long =
+        if (atStart) startMs + (now.trimStartMs / was.speed).toLong()
+        else (startMs + now.durationMs - (1000 / was.frameRate.coerceAtLeast(1f)).toLong().coerceIn(15, 50)).coerceAtLeast(startMs)
 
     /** Called when a drag on the timeline starts, so the whole drag is one undo step. */
     fun beginDrag() {

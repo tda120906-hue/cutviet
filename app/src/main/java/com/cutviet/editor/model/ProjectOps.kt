@@ -226,6 +226,33 @@ object ProjectOps {
         return c.copy(trimEndMs = e)
     }
 
+    /**
+     * Drags the left edge of a main-track clip that starts at [startMs] on the timeline by
+     * [deltaMs]: the edge sticks to [snapTo] times within [snapMs] and never goes past [stopAtMs]
+     * (the playhead, so trimming stops at the frame under it).
+     */
+    fun trimClipStart(c: Clip, startMs: Long, deltaMs: Long, stopAtMs: Long?, snapTo: List<Long>, snapMs: Long): Clip {
+        var edge = snap(startMs + deltaMs, snapTo, snapMs)
+        if (stopAtMs != null) edge = minOf(edge, stopAtMs)
+        return stretchClipStart(c, edge - startMs)
+    }
+
+    /** Drags the right edge of a main-track clip that starts at [startMs]; it sticks to [snapTo] within [snapMs]. */
+    fun trimClipEnd(c: Clip, startMs: Long, deltaMs: Long, snapTo: List<Long>, snapMs: Long): Clip {
+        val end = startMs + c.durationMs
+        return stretchClipEnd(c, snap(end + deltaMs, snapTo, snapMs) - end)
+    }
+
+    /**
+     * Where the playhead goes after [removedMs] were trimmed off the start of a clip at [startMs],
+     * so it stays on the same frame (or on the new first frame if its own was cut away).
+     */
+    fun playheadAfterStartTrim(playheadMs: Long, startMs: Long, removedMs: Long): Long = when {
+        removedMs <= 0 || playheadMs < startMs -> playheadMs
+        playheadMs < startMs + removedMs -> startMs
+        else -> playheadMs - removedMs
+    }
+
     /** Returns [t] moved onto the nearest of [points] when it is within [thresholdMs], otherwise [t]. */
     fun snap(t: Long, points: List<Long>, thresholdMs: Long): Long {
         val best = points.minByOrNull { abs(it - t) } ?: return t

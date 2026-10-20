@@ -135,6 +135,41 @@ class ProjectOpsTest {
     }
 
     @Test
+    fun trimmingTheStartStopsAtThePlayhead() {
+        // A 10 s clip at 4 s on the timeline, played at 2x: 5 s long there.
+        val v = video(10_000).copy(speed = 2f)
+        val stop = 6_000L
+        // Dragged 1.5 s: trims 3 s of source.
+        assertEquals(3_000, ProjectOps.trimClipStart(v, 4_000, 1_500, stop, emptyList(), 100).trimStartMs)
+        // Dragged past the playhead: stops on the frame under it, however far the finger goes.
+        for (d in listOf(2_000L, 2_500L, 4_000L)) {
+            val c = ProjectOps.trimClipStart(v, 4_000, d, stop, emptyList(), 100)
+            assertEquals(4_000, c.trimStartMs)
+            assertEquals(3_000, c.durationMs)
+        }
+        // Without a stop it goes on, and it still sticks to nearby points.
+        assertEquals(5_000, ProjectOps.trimClipStart(v, 4_000, 2_500, null, emptyList(), 100).trimStartMs)
+        assertEquals(4_000, ProjectOps.trimClipStart(v, 4_000, 1_950, null, listOf(stop), 100).trimStartMs)
+        // Dragging left brings back what was trimmed.
+        assertEquals(0, ProjectOps.trimClipStart(v.copy(trimStartMs = 2_000), 4_000, -3_000, stop, emptyList(), 100).trimStartMs)
+    }
+
+    @Test
+    fun trimmingTheEndSticksToNearbyPoints() {
+        val v = video(10_000)
+        assertEquals(7_000, ProjectOps.trimClipEnd(v, 0, -3_000, emptyList(), 100).trimEndMs)
+        assertEquals(6_000, ProjectOps.trimClipEnd(v, 0, -3_920, listOf(6_000), 100).trimEndMs)
+    }
+
+    @Test
+    fun playheadKeepsItsFrameAfterTheStartIsTrimmed() {
+        assertEquals(3_000, ProjectOps.playheadAfterStartTrim(5_000, 2_000, 2_000))
+        assertEquals(2_000, ProjectOps.playheadAfterStartTrim(3_000, 2_000, 2_000))
+        assertEquals(1_000, ProjectOps.playheadAfterStartTrim(1_000, 2_000, 2_000))
+        assertEquals(5_000, ProjectOps.playheadAfterStartTrim(5_000, 2_000, -1_000))
+    }
+
+    @Test
     fun snapPullsToNearbyEdgesOnly() {
         assertEquals(5_000, ProjectOps.snap(5_080, listOf(0, 5_000, 9_000), 100))
         assertEquals(5_300, ProjectOps.snap(5_300, listOf(0, 5_000, 9_000), 100))

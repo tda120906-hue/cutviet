@@ -210,6 +210,7 @@ private fun EditorContent(vm: EditorViewModel, onBack: () -> Unit) {
                 )
             }
             if (vm.busy) CircularProgressIndicator(color = Accent)
+            ScrubLabel(vm, Modifier.align(Alignment.TopCenter).padding(top = 10.dp))
         }
 
         // Transport.
@@ -388,5 +389,31 @@ private fun Toolbar(vm: EditorViewModel, onAddMedia: () -> Unit, onAddMusic: () 
             }
         }
         Spacer(Modifier.width(1.dp))
+    }
+}
+
+/**
+ * Over the preview while the finger moves the timeline or a clip edge: the time under the
+ * playhead, or where the dragged edge has got to in the source video and how long the clip is now.
+ */
+@Composable
+private fun ScrubLabel(vm: EditorViewModel, modifier: Modifier) {
+    val t = vm.trim
+    if (t == null && !vm.scrubbing) return
+    Column(
+        modifier.background(Color(0xCC000000), RoundedCornerShape(8.dp)).padding(horizontal = 12.dp, vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        if (t == null) {
+            Text(formatTime(vm.playheadMs), color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Text("/ ${formatTime(vm.project.durationMs)}", color = TextDim, fontSize = 11.sp)
+        } else {
+            Text(
+                (if (t.atStart) "Đầu đoạn: " else "Cuối đoạn: ") + formatTime(t.edgeSourceMs),
+                color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold,
+            )
+            Text("Đoạn dài ${formatTime(t.durationMs)}", color = TextDim, fontSize = 11.sp)
+            if (t.stopped) Text("Đã tới thanh trắng", color = Accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        }
     }
 }

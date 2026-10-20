@@ -50,7 +50,8 @@ private const val STEP_MS = 500L
 @Composable
 fun OverlayPreview(vm: EditorViewModel, modifier: Modifier = Modifier) {
     val project = vm.project
-    if (project.clips.isEmpty() || project.overlays.isEmpty()) return
+    // While a clip edge is dragged the preview shows the frame at the edge, not the playhead.
+    if (project.clips.isEmpty() || project.overlays.isEmpty() || vm.trim != null) return
     val (canvasW, canvasH) = ProjectOps.canvasSize(project)
     val playing = vm.preview.isPlaying.value
     val t = vm.playheadMs

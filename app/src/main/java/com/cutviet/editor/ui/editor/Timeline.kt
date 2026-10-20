@@ -45,6 +45,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -62,11 +63,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -115,7 +118,8 @@ fun Timeline(
     LaunchedEffect(pxPerMs) {
         scroll.scrollTo((vm.playheadMs * pxPerMs).roundToInt())
         snapshotFlow { scroll.value }.collect { v ->
-            if (!vm.preview.isPlaying.value) {
+            // While a clip edge is dragged the preview follows the edge, not the playhead.
+            if (!vm.preview.isPlaying.value && vm.trim == null) {
                 val t = (v / pxPerMs).toLong().coerceIn(0, vm.project.durationMs)
                 if (kotlin.math.abs(t - vm.playheadMs) > 1) {
                     vm.playheadMs = t
@@ -123,6 +127,17 @@ fun Timeline(
                 }
             }
         }
+    }
+    // Moving the timeline by hand shows each frame as the finger goes (Media3 scrubbing mode).
+    LaunchedEffect(Unit) {
+        snapshotFlow { scroll.isScrollInProgress && !vm.preview.isPlaying.value && vm.trim == null }
+            .collect { vm.setTimelineScrubbing(it) }
+    }
+    DisposableEffect(Unit) { onDispose { vm.setTimelineScrubbing(false) } }
+    // The editor moved the playhead itself (after a trim, for example).
+    val jumpsBefore = remember { vm.playheadJumps }
+    LaunchedEffect(vm.playheadJumps) {
+        if (vm.playheadJumps != jumpsBefore) scroll.scrollTo((vm.playheadJumpMs * pxPerMs).roundToInt())
     }
     // Follow playback.
     LaunchedEffect(playing, pxPerMs) {
@@ -169,6 +184,10 @@ fun Timeline(
                 Spacer(Modifier.width(half))
                 project.clips.forEachIndexed { index, clip ->
                     key(clip.id) {
+                        // A left edge being dragged in leaves a gap, so the rest of the clip stays put
+                        // and the edge moves with the finger toward the playhead.
+                        val gap = vm.trim?.takeIf { it.clipId == clip.id && it.atStart }?.gapMs ?: 0L
+                        if (gap > 0) Spacer(Modifier.width(with(density) { (gap * pxPerMs).toDp() }))
                         ClipBlock(
                             vm = vm, index = index, clip = clip, pxPerMs = pxPerMs, snapMs = snapMs,
                             width = with(density) { (clip.durationMs * pxPerMs).toDp() },
@@ -489,6 +508,41 @@ private fun Handle(modifier: Modifier, pxPerMs: Float, vm: EditorViewModel, onDr
     }
 }
 
+/**
+ * An edge handle of a main-track clip. While it moves, the preview shows the frame at the edge;
+ * a left edge stops at the playhead when snapping is on, with a tick felt in the hand.
+ */
+@Composable
+private fun ClipHandle(modifier: Modifier, pxPerMs: Float, snapMs: Long, vm: EditorViewModel, index: Int, atStart: Boolean) {
+    val haptic = LocalHapticFeedback.current
+    val snap by rememberUpdatedState(snapMs)
+    val stopped = vm.trim?.takeIf { it.atStart == atStart }?.stopped == true
+    LaunchedEffect(stopped) { if (stopped) haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) }
+    DisposableEffect(Unit) { onDispose { if (vm.trim?.atStart == atStart) vm.endTrim() } }
+    Box(
+        modifier
+            .width(14.dp)
+            .fillMaxHeight()
+            .background(if (stopped) Accent else Color.White)
+            .pointerInput(pxPerMs, index, atStart) {
+                var total = 0f
+                detectHorizontalDragGestures(
+                    onDragStart = { total = 0f; vm.beginTrim(index, atStart) },
+                    onDragEnd = { vm.endTrim() },
+                    onDragCancel = { vm.endTrim() },
+                    onHorizontalDrag = { change, dx ->
+                        change.consume()
+                        total += dx
+                        vm.trimTo((total / pxPerMs).toLong(), snap)
+                    },
+                )
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(Modifier.width(2.dp).height(12.dp).background(Color(0xFF333333)))
+    }
+}
+
 @Composable
 private fun Ruler(durationMs: Long, pxPerMs: Float, half: Dp) {
     val density = LocalDensity.current
@@ -545,21 +599,8 @@ private fun ClipBlock(vm: EditorViewModel, index: Int, clip: Clip, pxPerMs: Floa
                     .background(Color(0x99000000), RoundedCornerShape(3.dp)).padding(horizontal = 3.dp),
             )
             // Edge handles: trim a video, or make a picture shorter/longer.
-            Handle(Modifier.align(Alignment.CenterStart), pxPerMs, vm) { deltaMs ->
-                ProjectOps.updateClip(vm.project, index) { ProjectOps.stretchClipStart(clip, deltaMs) }
-            }
-            Handle(Modifier.align(Alignment.CenterEnd), pxPerMs, vm) { deltaMs ->
-                var d = deltaMs
-                if (vm.snapEnabled) {
-                    val end = vm.project.clipStartMs(index) + clip.durationMs
-                    val points = buildList {
-                        add(vm.playheadMs)
-                        vm.project.overlays.forEach { add(it.startMs); add(it.endMs) }
-                    }
-                    d = ProjectOps.snap(end + deltaMs, points, snapMs) - end
-                }
-                ProjectOps.updateClip(vm.project, index) { ProjectOps.stretchClipEnd(clip, d) }
-            }
+            ClipHandle(Modifier.align(Alignment.CenterStart), pxPerMs, snapMs, vm, index, atStart = true)
+            ClipHandle(Modifier.align(Alignment.CenterEnd), pxPerMs, snapMs, vm, index, atStart = false)
         }
     }
 }

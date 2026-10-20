@@ -32,6 +32,8 @@ class PreviewController(private val context: Context) {
     private var withSpeed = true
     private val handler = Handler(Looper.getMainLooper())
     private var pendingRebuild: Runnable? = null
+    /** What is scrubbing the preview right now (the timeline, a trim handle). */
+    private val scrubbers = HashSet<String>()
 
     private val listener = object : Player.Listener {
         override fun onIsPlayingChanged(playing: Boolean) {
@@ -47,12 +49,15 @@ class PreviewController(private val context: Context) {
         }
     }
 
-    /** Applies [p] to the player. Debounced so slider drags do not rebuild on every frame. */
-    fun setProject(p: Project, immediate: Boolean = false) {
+    /**
+     * Applies [p] to the player. Debounced so slider drags do not rebuild on every frame.
+     * [positionMs]: where to show afterwards; by default the current position.
+     */
+    fun setProject(p: Project, immediate: Boolean = false, positionMs: Long? = null) {
         val old = project
         project = p
         pendingRebuild?.let { handler.removeCallbacks(it) }
-        val r = Runnable { rebuild(if (old == null) 0L else positionMs()) }
+        val r = Runnable { rebuild(positionMs ?: if (old == null) 0L else positionMs()) }
         pendingRebuild = r
         if (immediate || old == null) handler.post(r) else handler.postDelayed(r, 250)
     }
@@ -83,8 +88,11 @@ class PreviewController(private val context: Context) {
                 composition = it
                 player.value = it
             }
+            // Players made for a new composition do not inherit scrubbing mode: switch it on again.
+            if (cp.isScrubbingModeEnabled) cp.setScrubbingModeEnabled(false)
             cp.setComposition(comp)
             cp.prepare()
+            if (scrubbers.isNotEmpty()) cp.setScrubbingModeEnabled(true)
             cp.seekTo(position.coerceIn(0, p.durationMs))
         } catch (e: Exception) {
             handleError(e)
@@ -137,6 +145,7 @@ class PreviewController(private val context: Context) {
             }
             b.build()
         }
+        if (ep.isScrubbingModeEnabled != scrubbers.isNotEmpty()) ep.setScrubbingModeEnabled(scrubbers.isNotEmpty())
         ep.setMediaItems(items)
         ep.prepare()
         seekSimple(p, positionMs)
@@ -151,6 +160,19 @@ class PreviewController(private val context: Context) {
 
     fun pause() {
         player.value?.pause()
+    }
+
+    /**
+     * Fast, frame-accurate seeking for as long as some [key] (the timeline, a trim handle) moves
+     * the picture with the finger. Pause first: Media3 resumes playback when scrubbing ends if it
+     * was playing when it began.
+     */
+    fun setScrubbing(key: String, on: Boolean) {
+        if (on) scrubbers += key else scrubbers -= key
+        val enabled = scrubbers.isNotEmpty()
+        if (enabled) player.value?.pause()
+        composition?.let { if (it.isScrubbingModeEnabled != enabled) it.setScrubbingModeEnabled(enabled) }
+        exo?.let { if (it.isScrubbingModeEnabled != enabled) it.setScrubbingModeEnabled(enabled) }
     }
 
     fun seekTo(timeMs: Long) {
