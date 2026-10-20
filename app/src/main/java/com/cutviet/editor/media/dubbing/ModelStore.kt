@@ -39,6 +39,8 @@ enum class DubModel(
     /** Needs a Hugging Face token whose account accepted the model's licence. */
     val gated: Boolean,
     val directUrl: String? = null,
+    /** Known SHA-256 of a [directUrl] file, checked after download. */
+    val sha256: String? = null,
 ) {
     WHISPER_LARGE_V3(
         label = "Nhận dạng giọng nói (Whisper large-v3, Q5)",
@@ -65,6 +67,20 @@ enum class DubModel(
         approxBytes = 66_000_000L,
         gated = false,
         directUrl = "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/UVR-MDX-NET-Voc_FT.onnx",
+    ),
+
+    /**
+     * 3D-Speaker's CAM++ voice fingerprint model trained on Chinese and English (Apache 2.0), as
+     * sherpa-onnx publishes it. Tells people apart for the dub.
+     */
+    SPEAKER_CAMPP(
+        label = "So giọng người nói (CAM++)",
+        repo = "",
+        path = "3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx",
+        approxBytes = 28_281_164L,
+        gated = false,
+        directUrl = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx",
+        sha256 = "aa3cfc16963a10586a9393f5035d6d6b57e98d358b347f80c2a30bf4f00ceba2",
     );
 
     fun file(context: Context) = File(ModelStore.dir(context), path)
@@ -189,7 +205,7 @@ class ModelDownloadWorker(context: Context, params: WorkerParameters) : Coroutin
             val size = head.contentLengthLong
             head.disconnect()
             if (size <= 0) throw java.io.IOException("no size for ${model.path}")
-            return null to size
+            return model.sha256 to size
         }
         val conn = URL("https://huggingface.co/api/models/${model.repo}/tree/main").openConnection() as HttpURLConnection
         conn.authorize(model)

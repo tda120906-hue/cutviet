@@ -39,6 +39,7 @@ class GeminiDubber(
 
     private var stoppedNotice: String? = null
     override val notice: String? get() = stoppedNotice
+    override val tellsSpeakersApart: Boolean get() = distinguish
 
     private class Voiced(val file: File, val ms: Long)
 
@@ -46,23 +47,27 @@ class GeminiDubber(
         voice: FloatArray,
         ranges: List<SpeechDetector.Range>,
         language: SourceLanguage,
+        speakers: List<Int?>?,
         progress: (Float) -> Unit,
     ): List<OnlineLine> {
         try {
             val room = DubbingPipeline.roomFor(ranges.map { it.startMs to (it.endMs - it.startMs) }, voice.size / 16L)
             val budgets = room.map { TranslationPrompt.syllableBudget(it, SYLLABLES_PER_SECOND) }
-            val heard = listen(voice, ranges, budgets, language) { progress(0.3f * it) }
+            val heard = listen(voice, ranges, budgets, language, speakers) { progress(0.3f * it) }
             val lines = heard.lines.filter { it.text.isNotBlank() }
             if (lines.isEmpty()) throw OnlineUnavailableException("Gemini không nghe ra câu nào để dịch")
 
-            // A person the model gave no gender gets one from the pitch of their voice.
-            val speakers = heard.speakers.filter { s -> lines.any { it.speaker == s.id } }.map { s ->
+            // People in the order they first speak (a fingerprinted one the model did not describe
+            // too); one the model gave no gender gets one from the pitch of their voice.
+            val firstLine = lines.groupBy { it.speaker }.mapValues { (_, l) -> l.minOf { it.index } }
+            val described = heard.speakers.associateBy { it.id }
+            val people = firstLine.keys.filter { it != "?" }.sortedBy { firstLine.getValue(it) }.map { id -> described[id] ?: Speaker(id, null, "") }.map { s ->
                 if (s.gender != null) s
                 else s.copy(gender = pitchGender(voice, lines.filter { it.speaker == s.id }.map { ranges[it.index] }) ?: Gender.FEMALE)
             }
             val main = lines.groupingBy { it.speaker }.eachCount().maxByOrNull { it.value }?.key
-            val roles = cast(speakers, distinguish, main)
-            DubLog.i(TAG, "cast: " + speakers.joinToString { s -> "${s.id}=${roles[s.id]?.label ?: "-"}/${roles[s.id]?.voice} (${s.gender}, ${s.description.take(60)})" })
+            val roles = cast(people, distinguish, main)
+            DubLog.i(TAG, "cast: " + people.joinToString { s -> "${s.id}=${roles[s.id]?.label ?: "-"}/${roles[s.id]?.voice} (${s.gender}, ${s.description.take(60)})" })
             val fallbackRole = roles[main] ?: Role(null, POOLS.getValue(Gender.FEMALE).first(), Gender.FEMALE, "")
             fun roleOf(l: Heard) = roles[l.speaker] ?: fallbackRole
 
@@ -124,6 +129,7 @@ class GeminiDubber(
         ranges: List<SpeechDetector.Range>,
         budgets: List<Int>,
         language: SourceLanguage,
+        people: List<Int?>?,
         progress: (Float) -> Unit,
     ): Listening {
         val speakers = LinkedHashMap<String, Speaker>()
@@ -132,8 +138,8 @@ class GeminiDubber(
         batches.forEachIndexed { b, indices ->
             val what = "nghe ${b + 1}/${batches.size}"
             val known = speakers.values.toList()
-            val text = askJson(what) { schema -> listenRequest(textModel, language, voice, ranges, indices, budgets, known, schema) }
-            val parsed = parseListening(text, indices.toSet())
+            val text = askJson(what) { schema -> listenRequest(textModel, language, voice, ranges, indices, budgets, known, schema, people) }
+            val parsed = parseListening(text, indices.toSet(), people)
                 ?: throw OnlineUnavailableException("Không đọc được câu trả lời của Gemini ($what)")
             parsed.speakers.forEach { s -> if (s.id !in speakers || speakers[s.id]?.gender == null) speakers[s.id] = s }
             parsed.lines.forEach { lines[it.index] = it }
@@ -387,10 +393,12 @@ class GeminiDubber(
             budgets: List<Int>,
             known: List<Speaker>,
             schema: Boolean,
+            people: List<Int?>? = null,
         ): JSONObject {
-            val input = JSONArray().put(text(listenPrompt(language, indices.size, known)))
+            val input = JSONArray().put(text(listenPrompt(language, indices.size, known, people != null)))
             for (i in indices) {
-                input.put(text("[S${i + 1}] (tối đa ${budgets[i]} âm tiết)"))
+                val who = people?.getOrNull(i)?.let { " · ${personId(it)}" }.orEmpty()
+                input.put(text("[S${i + 1}$who] (tối đa ${budgets[i]} âm tiết)"))
                 val r = ranges[i]
                 val from = ((r.startMs - PAD_MS) * 16).toInt().coerceIn(0, voice.size)
                 val to = ((r.endMs + PAD_MS) * 16).toInt().coerceIn(from, voice.size)
@@ -401,9 +409,13 @@ class GeminiDubber(
             }
         }
 
-        private fun listenPrompt(language: SourceLanguage, count: Int, known: List<Speaker>): String = buildString {
+        private fun listenPrompt(language: SourceLanguage, count: Int, known: List<Speaker>, fingerprinted: Boolean): String = buildString {
             append("Bạn là đạo diễn lồng tiếng phim. Dưới đây là $count đoạn ghi âm lời nói ${language.label.lowercase()} trong một video, đúng thứ tự thời gian. ")
             append("Mỗi đoạn có nhãn [S<số>] và số âm tiết tối đa của câu tiếng Việt.\n")
+            if (fingerprinted) {
+                append("Mã P<số> trong nhãn là người nói do máy so dấu vết giọng xác định: các đoạn cùng mã là cùng một người, khác mã là khác người. ")
+                append("Dùng đúng mã đó làm speaker và mô tả mỗi mã một lần. Đoạn không có mã P thì tự nhận ra người nói, dùng lại mã P nếu đúng là người đó.\n")
+            }
             append("Với mỗi đoạn:\n")
             append("1. Nhận ra ai đang nói. Cùng một người ở nhiều đoạn thì dùng cùng một mã (A, B, C…). Phân biệt bằng giọng nghe được, không đoán theo nội dung.\n")
             append("2. Ghi nguyên văn câu gốc (source).\n")
@@ -434,8 +446,14 @@ class GeminiDubber(
                  "required":["speakers","lines"]}
             """.trimIndent())
 
-        /** Reads the listening answer; segments are numbered from 1 in the prompt. */
-        fun parseListening(answer: String, expected: Set<Int>): Listening? {
+        /** Id of a fingerprinted person in the prompt and the answer. */
+        fun personId(p: Int) = "P${p + 1}"
+
+        /**
+         * Reads the listening answer; segments are numbered from 1 in the prompt. Where [people]
+         * names a segment's person, that wins over the model's guess.
+         */
+        fun parseListening(answer: String, expected: Set<Int>, people: List<Int?>? = null): Listening? {
             val json = jsonIn(answer) ?: return null
             val speakers = ArrayList<Speaker>()
             json.optJSONArray("speakers")?.let { arr ->
@@ -452,7 +470,7 @@ class GeminiDubber(
                 val o = arr.optJSONObject(i) ?: continue
                 val index = o.optInt("index", -1) - 1
                 if (index !in expected || lines.any { it.index == index }) continue
-                val speaker = o.optString("speaker").trim().ifEmpty { "?" }
+                val speaker = people?.getOrNull(index)?.let(::personId) ?: o.optString("speaker").trim().ifEmpty { "?" }
                 lines += Heard(index, speaker, o.optString("source").trim(), o.optString("vi").trim(), normaliseEmotion(o.optString("emotion")))
             }
             return Listening(speakers, lines.sortedBy { it.index })

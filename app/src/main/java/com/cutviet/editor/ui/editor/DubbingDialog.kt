@@ -112,6 +112,7 @@ private fun DubTab(vm: EditorViewModel, settings: DubSettings, onOpenModels: () 
     var mode by remember { mutableStateOf(settings.mode) }
     var engine by remember { mutableStateOf(settings.onlineEngine) }
     var distinguish by remember { mutableStateOf(settings.distinguishSpeakers) }
+    var count by remember { mutableIntStateOf(settings.speakerCount) }
     var original by remember { mutableFloatStateOf(settings.originalVolume) }
     val voices = vm.voice.voices.value
     var voiceName by remember { mutableStateOf(voices.firstOrNull { !it.needsNetwork }?.name ?: voices.firstOrNull()?.name) }
@@ -157,14 +158,23 @@ private fun DubTab(vm: EditorViewModel, settings: DubSettings, onOpenModels: () 
             Text("Phân biệt giọng từng người", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
             Text(
                 if (mode != DubMode.OFFLINE && engine == OnlineEngine.NATURAL) {
-                    "Mỗi người một giọng riêng đúng giới tính. Offline chỉ phân biệt được nam, nữ và trẻ em theo độ cao của giọng."
+                    "Máy so dấu vân giọng của cả đoạn để biết câu nào của ai, rồi Gemini đọc mỗi người một giọng riêng đúng giới tính. Offline: mỗi người một giọng máy và độ cao riêng."
                 } else {
-                    "Offline: nam, nữ và trẻ em đọc ở độ cao giọng khác nhau, đoán theo giọng gốc."
+                    "Máy so dấu vân giọng của cả đoạn để biết câu nào của ai; mỗi người một giọng máy và độ cao riêng, nam, nữ, trẻ em đoán theo giọng gốc."
                 },
                 color = TextDim, fontSize = 12.sp,
             )
         }
         Switch(checked = distinguish, onCheckedChange = { distinguish = it; settings.distinguishSpeakers = it })
+    }
+    if (distinguish) {
+        Label("Số người nói")
+        Chips(SPEAKER_COUNTS, count, { if (it == 0) "Tự động" else "$it người" }) { count = it; settings.speakerCount = it }
+        Text(
+            if (count == 0) "Máy tự đếm. Nếu vẫn gộp hai người làm một hoặc tách một người thành hai, chọn đúng số người trong đoạn."
+            else "Máy chia các câu cho đúng $count người.",
+            color = TextDim, fontSize = 12.sp,
+        )
     }
 
     Label("Giọng tiếng Việt")
@@ -214,7 +224,10 @@ private fun missingModels(context: Context, mode: DubMode, s: DubSettings): List
         if (!DubModel.WHISPER_LARGE_V3.isReady(context)) add(DubModel.WHISPER_LARGE_V3)
         if (!DubModel.GEMMA_3N_E4B.isReady(context)) add(DubModel.GEMMA_3N_E4B)
     }
+    if (s.distinguishSpeakers && !DubModel.SPEAKER_CAMPP.isReady(context)) add(DubModel.SPEAKER_CAMPP)
 }
+
+private val SPEAKER_COUNTS = listOf(0, 2, 3, 4, 5, 6)
 
 @Composable
 private fun ModelsTab(settings: DubSettings) {

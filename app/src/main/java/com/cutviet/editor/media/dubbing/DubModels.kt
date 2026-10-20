@@ -72,9 +72,21 @@ data class OnlineLine(
     val speed: Float,
 )
 
-/** Online dubbing of the speech [ranges] (ms) of [voice], 16 kHz mono. */
+/**
+ * Online dubbing of the speech [ranges] (ms) of [voice], 16 kHz mono. [speakers], when given,
+ * says who speaks each range (the same number is the same person, from voice fingerprints).
+ */
 interface OnlineDubber {
-    suspend fun dub(voice: FloatArray, ranges: List<SpeechDetector.Range>, language: SourceLanguage, progress: (Float) -> Unit): List<OnlineLine>
+    suspend fun dub(
+        voice: FloatArray,
+        ranges: List<SpeechDetector.Range>,
+        language: SourceLanguage,
+        speakers: List<Int?>?,
+        progress: (Float) -> Unit,
+    ): List<OnlineLine>
+
+    /** Whether it gives each person a voice of their own, so knowing who speaks helps. */
+    val tellsSpeakersApart: Boolean get() = false
 
     /** What the user should know about a dub that went through, such as lines the phone had to read. */
     val notice: String? get() = null
