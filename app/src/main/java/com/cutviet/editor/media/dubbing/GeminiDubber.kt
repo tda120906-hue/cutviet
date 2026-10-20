@@ -268,8 +268,8 @@ class GeminiDubber(
          * light, young voices and are described as children in the style.
          */
         val POOLS: Map<Gender, List<String>> = mapOf(
-            Gender.MALE to listOf("Charon", "Puck", "Orus", "Iapetus", "Algenib", "Umbriel", "Achird", "Sadaltager", "Fenrir", "Enceladus", "Alnilam", "Schedar"),
-            Gender.FEMALE to listOf("Kore", "Aoede", "Despina", "Sulafat", "Callirrhoe", "Achernar", "Vindemiatrix", "Erinome", "Zephyr", "Autonoe", "Gacrux", "Pulcherrima"),
+            Gender.MALE to listOf("Charon", "Puck", "Orus", "Iapetus", "Algenib", "Umbriel", "Achird", "Sadaltager", "Fenrir", "Enceladus", "Alnilam", "Schedar", "Rasalgethi", "Algieba", "Zubenelgenubi", "Sadachbia"),
+            Gender.FEMALE to listOf("Kore", "Aoede", "Despina", "Sulafat", "Callirrhoe", "Achernar", "Vindemiatrix", "Erinome", "Zephyr", "Autonoe", "Gacrux", "Pulcherrima", "Leda", "Laomedeia"),
             Gender.CHILD to listOf("Leda", "Laomedeia", "Autonoe", "Puck"),
         )
 
