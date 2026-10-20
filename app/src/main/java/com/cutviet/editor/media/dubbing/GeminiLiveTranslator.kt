@@ -47,7 +47,6 @@ class GeminiLiveTranslator(
         voice: FloatArray,
         ranges: List<SpeechDetector.Range>,
         language: SourceLanguage,
-        speakers: List<Int?>?,
         progress: (Float) -> Unit,
     ): List<OnlineLine> {
         if (simulateQuota) {

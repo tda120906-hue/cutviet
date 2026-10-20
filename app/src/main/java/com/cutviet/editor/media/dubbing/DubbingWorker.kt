@@ -61,7 +61,6 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
             val pipeline = DubbingPipeline(
                 separator = Engines.separator(applicationContext, dir),
                 online = Engines.online(applicationContext, dir),
-                diarizer = Engines.diarizer(applicationContext),
                 context = applicationContext,
                 asr = Engines.speechToText(applicationContext, dir),
                 translator = Engines.translator(applicationContext),
@@ -70,11 +69,7 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
             )
             var lastStep: DubbingPipeline.Step? = null
             var lastPercent = -1
-            val dubSettings = DubSettings(applicationContext)
-            val settings = DubbingPipeline.Settings(
-                language, inputData.getString(KEY_VOICE),
-                distinguish = dubSettings.distinguishSpeakers, speakers = dubSettings.speakerCount,
-            )
+            val settings = DubbingPipeline.Settings(language, inputData.getString(KEY_VOICE), distinguish = DubSettings(applicationContext).distinguishSpeakers)
             val out = pipeline.run(source, sourceStart, sourceEnd, settings) { step, p ->
                 // Only report whole-percent changes: the system drops notifications sent too often.
                 val percent = (p * 100).toInt()
@@ -282,17 +277,6 @@ object Engines {
             DubMode.OFFLINE -> false
         }
         return if (use) dubber() else skip("Auto on mobile data with offline models ready")
-    }
-
-    /** Null when speakers are not told apart or the fingerprint model is not downloaded (pitch only then). */
-    fun diarizer(context: Context): SpeakerDiarizer? {
-        val model = DubModel.SPEAKER_CAMPP
-        if (!DubSettings(context).distinguishSpeakers) return null
-        if (!model.isReady(context)) {
-            DubLog.i(DubbingPipeline.TAG, "no voice fingerprint model: speakers told apart by pitch and Gemini only")
-            return null
-        }
-        return SpeakerDiarizer(context, model.file(context))
     }
 
     /** Null when the separation model is not downloaded: the dub then only turns the whole clip down. */

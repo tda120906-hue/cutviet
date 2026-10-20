@@ -38,15 +38,10 @@ class DubSettings(context: Context) {
         get() = prefs.getString("gemini_tts_model", null)?.takeIf { it.isNotBlank() } ?: GeminiDubber.DEFAULT_TTS_MODEL
         set(v) = prefs.edit().putString("gemini_tts_model", v.trim()).apply()
 
-    /** Give each person a voice of their own. */
+    /** Give each person (online) or men, women and children (offline) a voice of their own. */
     var distinguishSpeakers: Boolean
         get() = prefs.getBoolean("distinguish_speakers", true)
         set(v) = prefs.edit().putBoolean("distinguish_speakers", v).apply()
-
-    /** How many people speak in the clip, when the user knows; 0 lets the app find out. */
-    var speakerCount: Int
-        get() = prefs.getInt("speaker_count", 0)
-        set(v) = prefs.edit().putInt("speaker_count", v.coerceIn(0, 8)).apply()
 
     /** Test switch: the online branch acts as if Gemini answered 429, to check the offline fallback. */
     var simulateQuota: Boolean
