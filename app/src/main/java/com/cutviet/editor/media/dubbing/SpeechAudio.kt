@@ -1,63 +1,6 @@
 package com.cutviet.editor.media.dubbing
 
-import kotlin.math.log10
-import kotlin.math.max
 import kotlin.math.sqrt
-
-/**
- * Cuts one synthesized recording of several lines (read with long pauses between them) back into
- * the lines, at its longest pauses. This lets the natural online voice read a speaker's lines in
- * one request, which saves the free daily quota.
- */
-object SilenceSplit {
-    /** A pause shorter than this is never taken as the break between two lines. */
-    const val MIN_PAUSE_MS = 300
-
-    /**
-     * Sample ranges of the [weights].size lines in [x], or null when the pauses are not clear
-     * enough to trust (then each line is synthesized on its own). [weights] are the lines'
-     * expected lengths (syllables), used to check the cut.
-     */
-    fun split(x: FloatArray, rate: Int, weights: List<Int>): List<IntRange>? {
-        val pieces = weights.size
-        if (pieces <= 1) return listOf(x.indices)
-        val frame = max(1, rate / 100)
-        val n = x.size / frame
-        if (n < pieces * 10) return null
-        val db = DoubleArray(n) { i ->
-            var s = 0.0
-            for (k in i * frame until (i + 1) * frame) s += x[k].toDouble() * x[k]
-            20 * log10(max(sqrt(s / frame), 1e-6))
-        }
-        val loud = db.sorted()[(n * 0.95).toInt().coerceAtMost(n - 1)]
-        val threshold = max(-60.0, loud - 35.0)
-        // Silent runs strictly inside the recording.
-        val runs = ArrayList<IntRange>()
-        var i = 0
-        while (i < n) {
-            if (db[i] >= threshold) { i++; continue }
-            var j = i
-            while (j < n && db[j] < threshold) j++
-            if (i > 0 && j < n) runs += i until j
-            i = j
-        }
-        val chosen = runs.sortedByDescending { it.last - it.first }.take(pieces - 1)
-        if (chosen.size < pieces - 1) return null
-        if (chosen.any { (it.last - it.first + 1) * 10 < MIN_PAUSE_MS }) return null
-        val cuts = chosen.sortedBy { it.first }.map { ((it.first + it.last + 1) / 2) * frame }
-        val bounds = listOf(0) + cuts + listOf(x.size)
-        val out = (0 until pieces).map { bounds[it] until bounds[it + 1] }
-        // Each piece should be roughly as long as its text: a wrong cut gives one line two texts.
-        val total = weights.sum().coerceAtLeast(1)
-        val perWeight = x.size.toDouble() / total
-        val ok = out.indices.all { k ->
-            val expected = max(1, weights[k]) * perWeight
-            val got = (out[k].last - out[k].first + 1).toDouble()
-            got in expected * 0.35..expected * 2.8
-        }
-        return if (ok) out else null
-    }
-}
 
 /**
  * Voice pitch, to tell men, women and children apart when no online model is used: adult male

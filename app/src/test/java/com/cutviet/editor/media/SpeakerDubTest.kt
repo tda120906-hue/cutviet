@@ -5,7 +5,6 @@ import com.cutviet.editor.media.dubbing.GeminiDubber
 import com.cutviet.editor.media.dubbing.Gender
 import com.cutviet.editor.media.dubbing.Loudness
 import com.cutviet.editor.media.dubbing.PitchTracker
-import com.cutviet.editor.media.dubbing.SilenceSplit
 import com.cutviet.editor.media.dubbing.SourceLanguage
 import com.cutviet.editor.media.dubbing.SpeechDetector
 import com.cutviet.editor.model.AudioKind
@@ -46,34 +45,6 @@ class SpeakerDubTest {
         }
         // Silence has no pitch.
         assertNull(PitchTracker.medianF0(FloatArray(16_000), 16_000))
-    }
-
-    @Test
-    fun oneRecordingOfSeveralLinesIsCutAtItsPauses() {
-        val rate = 24_000
-        val lines = listOf(600, 1200, 900)
-        val pause = FloatArray(rate * 600 / 1000)
-        val parts = ArrayList<FloatArray>()
-        lines.forEachIndexed { k, ms ->
-            if (k > 0) parts += pause
-            parts += voice(200.0, ms, rate)
-        }
-        val x = FloatArray(parts.sumOf { it.size })
-        var at = 0
-        parts.forEach { it.copyInto(x, at); at += it.size }
-
-        val pieces = SilenceSplit.split(x, rate, listOf(3, 6, 4))!!
-        assertEquals(3, pieces.size)
-        // Each cut lands inside its pause.
-        val firstPause = (600 * rate / 1000) until (1200 * rate / 1000)
-        val secondPause = (2400 * rate / 1000) until (3000 * rate / 1000)
-        assertTrue(pieces[0].last in firstPause)
-        assertTrue(pieces[1].last in secondPause)
-        assertEquals(x.size - 1, pieces[2].last)
-
-        // Pauses too short to trust: no cut, the lines are voiced one by one instead.
-        val tight = voice(200.0, 600, rate) + FloatArray(rate / 10) + voice(200.0, 600, rate)
-        assertNull(SilenceSplit.split(tight, rate, listOf(3, 3)))
     }
 
     @Test
@@ -120,29 +91,42 @@ class SpeakerDubTest {
     }
 
     @Test
-    fun linesOfOneVoiceAndToneAreReadTogether() {
+    fun peopleAreVoicedOneAfterAnotherMostLinesFirst() {
         val a = GeminiDubber.Role("Nam 1", "Charon", Gender.MALE, "")
         val b = GeminiDubber.Role("Nữ 1", "Kore", Gender.FEMALE, "")
         fun h(i: Int, who: String, emotion: String = "") = GeminiDubber.Heard(i, who, "src", "câu số $i", emotion)
-        val lines = listOf(h(0, "A"), h(1, "B"), h(2, "A"), h(3, "A", "laughing"), h(4, "B"), h(5, "A"))
-        val groups = GeminiDubber.groups(lines) { if (it.speaker == "A") a else b }
-        assertEquals(listOf(listOf(0, 2, 5), listOf(1, 4), listOf(3)), groups.map { g -> g.map { it.index } })
+        val lines = listOf(h(0, "B"), h(1, "A"), h(2, "A"), h(3, "A", "laughing"), h(4, "B"), h(5, "A"))
+        val order = GeminiDubber.voicingOrder(lines) { if (it.speaker == "A") a else b }
+        // Every line once, each person's lines together and in time order, whatever their tone.
+        assertEquals(listOf(listOf(1, 2, 3, 5), listOf(0, 4)), order.map { g -> g.map { it.index } })
+    }
 
-        val many = (0 until 14).map { h(it, "A") }
-        val big = GeminiDubber.groups(many) { a }
-        assertTrue(big.all { it.size <= 6 })
-        assertEquals(14, big.sumOf { it.size })
+    @Test
+    fun everyLineOfAPersonIsDescribedTheSameWayAndToneIsATag() {
+        val role = GeminiDubber.Role("Nam 1", "Charon", Gender.MALE, "a man in his 40s, deep and calm")
+        val plain = GeminiDubber.ttsPrompt(role, "", "Chào anh.")
+        val laughing = GeminiDubber.ttsPrompt(role, "laughing", "Thật à?")
+        // Same directions for both lines; only the transcript differs.
+        assertEquals(plain.substringBefore("#### TRANSCRIPT"), laughing.substringBefore("#### TRANSCRIPT"))
+        assertTrue(plain.contains("a man in his 40s, deep and calm"))
+        assertTrue(plain.endsWith("#### TRANSCRIPT\nChào anh."))
+        assertTrue(laughing.endsWith("#### TRANSCRIPT\n[laughs] Thật à?"))
+        assertEquals("[annoyed]", GeminiDubber.audioTag("Annoyed"))
+        assertNull(GeminiDubber.audioTag("neutral"))
+        assertNull(GeminiDubber.audioTag("tức giận"))
+        val child = GeminiDubber.Role("Trẻ em 1", "Leda", Gender.CHILD, "")
+        assertTrue(GeminiDubber.persona(child).contains("child"))
     }
 
     @Test
     fun requestsHaveTheShapeTheInteractionsApiDocuments() {
-        val tts = GeminiDubber.ttsRequest("gemini-3.8-flash-tts", "Xin chào", "Kore", "an adult woman")
+        val tts = GeminiDubber.ttsRequest("gemini-3.8-flash-tts", "Xin chào", "Kore")
         assertEquals("gemini-3.8-flash-tts", tts.getString("model"))
         val turn = tts.getJSONArray("input").getJSONObject(0)
         assertEquals("user_input", turn.getString("type"))
         val content = turn.getJSONArray("content").getJSONObject(0)
         assertEquals("Xin chào", content.getString("text"))
-        assertEquals("speech_metadata", content.getJSONArray("annotations").getJSONObject(0).getString("type"))
+        assertFalse(content.has("annotations"))
         assertEquals("audio", tts.getJSONObject("response_format").getString("type"))
         assertEquals("Kore", tts.getJSONObject("generation_config").getJSONArray("speech_config").getJSONObject(0).getString("voice"))
 
