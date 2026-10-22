@@ -756,7 +756,7 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
         val stems = result.stems?.let {
             ProjectOps.DubStems(Uri.fromFile(it.voice).toString(), Uri.fromFile(it.background).toString(), result.sourceStartMs, it.durationMs)
         }
-        commit(ProjectOps.applyDub(project, at, lines, originalVolume, stems, result.gain))
+        commit(ProjectOps.applyDub(project, at, lines, originalVolume, stems, result.gain, result.slowdowns))
         val fallback = info.outputData.getString(DubbingWorker.KEY_FALLBACK)
         toast = buildString {
             append("Đã lồng tiếng ${lines.size} câu")
@@ -764,6 +764,8 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
             append(if (stems != null) ", giữ nguyên âm thanh nền." else ". Chưa có model tách giọng nên tiếng gốc chỉ được giảm cả đoạn.")
             val voices = info.outputData.getInt(DubbingWorker.KEY_SPEAKERS, 0)
             if (voices > 1) append(" Có $voices giọng khác nhau, tên mỗi track ghi ai nói.")
+            val slowed = info.outputData.getInt(DubbingWorker.KEY_SLOWED, 0)
+            if (slowed > 0) append(" Video được làm chậm nhẹ ở $slowed chỗ để câu lồng tiếng vừa.")
             if (fallback != null) append(" Online lỗi nên đã chuyển offline: $fallback")
             info.outputData.getString(DubbingWorker.KEY_NOTE)?.let { append(" Lưu ý: $it.") }
         }

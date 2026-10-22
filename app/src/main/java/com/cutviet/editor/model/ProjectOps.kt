@@ -104,11 +104,15 @@ object ProjectOps {
     fun applyDub(
         p: Project, index: Int, lines: List<DubLine>, originalVolume: Float,
         stems: DubStems? = null, dubVolume: Float = 1f,
+        /** Stretches of the clip's source played slower so long lines fit (stems already stretched to match). */
+        slowdowns: List<DubTime.Slowdown> = emptyList(),
     ): Project {
         val c = p.clips.getOrNull(index) ?: return p
         val clipStart = p.clipStartMs(index)
         val clipEnd = clipStart + c.durationMs
-        fun timelineAt(sourceMs: Long) = clipStart + ((sourceMs - c.trimStartMs) / c.speed).toLong()
+        val slow = if (c.isImage) emptyList() else DubTime.normalise(slowdowns, c.trimStartMs, c.trimEndMs)
+        fun timelineAt(sourceMs: Long) =
+            clipStart + ((DubTime.stretched(sourceMs, slow) - DubTime.stretched(c.trimStartMs, slow)) / c.speed).toLong()
         val tracks = lines.filter { it.sourceStartMs in c.trimStartMs until c.trimEndMs && it.durationMs > 0 }.map {
             AudioTrack(
                 kind = AudioKind.DUB, uri = it.uri, name = (it.speaker?.let { s -> "$s: " }.orEmpty() + it.text.trim()).take(40), sourceDurationMs = it.durationMs,
@@ -116,10 +120,11 @@ object ProjectOps {
             )
         }
         val stemTracks = stems?.let { st ->
-            // The stems cover the clip's trim; play them at the clip's speed so they stay in sync.
-            val from = (c.trimStartMs - st.sourceStartMs).coerceIn(0, st.durationMs)
-            val to = (c.trimEndMs - st.sourceStartMs).coerceIn(from, st.durationMs)
-            val start = timelineAt(st.sourceStartMs + from)
+            // The stems cover the clip's trim (stretched like the video); played at the clip's speed they stay in sync.
+            val origin = DubTime.stretched(st.sourceStartMs, slow)
+            val from = (DubTime.stretched(c.trimStartMs, slow) - origin).coerceIn(0, st.durationMs)
+            val to = (DubTime.stretched(c.trimEndMs, slow) - origin).coerceIn(from, st.durationMs)
+            val start = clipStart + ((origin + from - DubTime.stretched(c.trimStartMs, slow)) / c.speed).toLong()
             listOf(
                 AudioTrack(
                     kind = AudioKind.BACKGROUND, uri = st.backgroundUri, name = "Nền: ${c.uri.substringAfterLast('/').take(30)}",
@@ -133,10 +138,31 @@ object ProjectOps {
             )
         }.orEmpty()
         val replaced = setOf(AudioKind.DUB, AudioKind.BACKGROUND, AudioKind.SOURCE_VOICE)
-        val kept = p.audios.filterNot { it.kind in replaced && it.startMs in clipStart until clipEnd }
         val clipVolume = if (stems != null) 0f else originalVolume.coerceIn(0f, 2f)
-        val clips = p.clips.toMutableList().also { it[index] = c.copy(volume = clipVolume) }
-        return p.copy(clips = clips, audios = kept + stemTracks + tracks)
+        // The clip, cut where its video plays slower (the first piece keeps the clip's id).
+        val pieces = DubTime.pieces(c.trimStartMs, c.trimEndMs, slow).mapIndexed { i, piece ->
+            c.copy(
+                id = if (i == 0) c.id else newId(),
+                trimStartMs = piece.startMs, trimEndMs = piece.endMs, speed = c.speed * piece.factor, volume = clipVolume,
+                texts = if (i == 0) c.texts else c.texts.map { it.copy(id = newId()) },
+            )
+        }
+        val newEnd = clipStart + pieces.sumOf { it.durationMs }
+        val delta = newEnd - clipEnd
+        // Everything after the clip moves by the time the slow stretches add; subtitles inside it follow the video.
+        fun later(t: Long) = if (t >= clipEnd) t + delta else t
+        fun inClip(t: Long): Long {
+            if (t < clipStart || t >= clipEnd || slow.isEmpty()) return later(t)
+            return timelineAt(c.trimStartMs + ((t - clipStart) * c.speed).toLong())
+        }
+        val kept = p.audios.filterNot { it.kind in replaced && it.startMs in clipStart until clipEnd }.map { it.copy(startMs = later(it.startMs)) }
+        val clips = p.clips.toMutableList().also { it.removeAt(index); it.addAll(index, pieces) }
+        return p.copy(
+            clips = clips,
+            audios = kept + stemTracks + tracks,
+            overlays = if (delta == 0L) p.overlays else p.overlays.map { it.copy(startMs = later(it.startMs)) },
+            subtitles = if (delta == 0L) p.subtitles else p.subtitles.map { it.copy(startMs = inClip(it.startMs), endMs = inClip(it.endMs)) },
+        )
     }
 
     fun restackOverlay(p: Project, id: String, delta: Int): Project {

@@ -62,6 +62,16 @@ class DubSettings(context: Context) {
         get() = prefs.getFloat("original_volume", 0f)
         set(v) = prefs.edit().putFloat("original_volume", v).apply()
 
+    /** Fastest a dubbed line may be played to fit its time (1.4 at most). */
+    var maxDubSpeed: Float
+        get() = prefs.getFloat("max_dub_speed", com.cutviet.editor.model.DubTime.DEFAULT_MAX_DUB).coerceIn(1f, 1.4f)
+        set(v) = prefs.edit().putFloat("max_dub_speed", v.coerceIn(1f, 1.4f)).apply()
+
+    /** Slowest the video under a long line may be played (0.8 at least; 1 = never slowed). */
+    var minVideoSpeed: Float
+        get() = prefs.getFloat("min_video_speed", com.cutviet.editor.model.DubTime.DEFAULT_MIN_VIDEO).coerceIn(0.8f, 1f)
+        set(v) = prefs.edit().putFloat("min_video_speed", v.coerceIn(0.8f, 1f)).apply()
+
     companion object {
         const val FILE = "dub_secrets"
     }
