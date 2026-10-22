@@ -241,6 +241,7 @@ private fun EditorContent(vm: EditorViewModel, onBack: () -> Unit) {
             PanelHost(vm, panel, Modifier.height(if (typing) 220.dp else 290.dp))
         } else {
             vm.dubStatus?.let { DubbingBanner(it, onOpen = { vm.showDubbing = true }) }
+            vm.redubStatus?.let { DubbingBanner(it, onOpen = {}) }
             vm.subtitleStatus?.let { SubtitleBanner(it, onOpen = { vm.openPanel(Panel.SUBTITLE) }) }
             Toolbar(vm, onAddMedia = { addMedia() }, onAddMusic = { addMusic() }, onAddOverlay = { addOverlay() })
         }
@@ -259,6 +260,7 @@ private fun EditorContent(vm: EditorViewModel, onBack: () -> Unit) {
     vm.eraserOverlayId?.let { id ->
         vm.project.overlays.firstOrNull { it.id == id }?.let { EraserDialog(vm, it) }
     }
+    vm.redubTrackId?.let { RedubDialog(vm, it, onDismiss = { vm.redubTrackId = null }) }
     if (vm.showDubbing) DubbingDialog(vm, onDismiss = { vm.showDubbing = false; vm.dubbingTab = 0 }, initialTab = vm.dubbingTab)
     if (vm.showSubtitleDialog) {
         SubtitleDialog(vm, onDismiss = { vm.showSubtitleDialog = false }, onOpenModels = {
@@ -336,6 +338,7 @@ private fun Toolbar(vm: EditorViewModel, onAddMedia: () -> Unit, onAddMusic: () 
         vm.selectedAudio != null -> buildList {
             add(Tool("Chỉnh âm thanh", Icons.Filled.GraphicEq) { vm.openPanel(Panel.AUDIO) })
             if (vm.selectedAudio?.kind == AudioKind.VOICE) add(Tool("Sửa giọng đọc", Icons.Filled.RecordVoiceOver) { vm.openPanel(Panel.VOICE) })
+            if (vm.selectedAudio?.kind == AudioKind.DUB) add(Tool("Lồng lại câu này", Icons.Filled.Translate) { vm.openRedub() })
             add(Tool("Đến đầu phát", Icons.Filled.VerticalAlignCenter) { vm.updateSelectedAudio { it.copy(startMs = vm.playheadMs) } })
             add(Tool("Xóa", Icons.Filled.Delete, danger = true) { vm.deleteSelectedAudio() })
         }

@@ -100,7 +100,7 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                 DubLog.i(DubbingPipeline.TAG, "video slowed in ${slowdowns.size} places: " + slowdowns.joinToString { "${it.startMs}-${it.endMs}ms x${"%.2f".format(it.factor)}" })
             }
             val finished = DubbingPipeline.Output(fitted.segments, stems, out.gain, out.usedOnline, out.fallbackReason, out.notice)
-            resultFile(applicationContext, id.toString()).writeText(encode(finished, sourceStart, pipeline.timings, slowdowns).toString())
+            resultFile(applicationContext, id.toString()).writeText(encode(finished, sourceStart, pipeline.timings, slowdowns, language, inputData.getString(KEY_VOICE)).toString())
             return Result.success(
                 workDataOf(
                     KEY_COUNT to out.segments.size, KEY_SEPARATED to (out.stems != null),
@@ -234,11 +234,16 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         class JobResult(
             val segments: List<DubbedSegment>, val stems: Stems?, val sourceStartMs: Long, val gain: Float,
             val slowdowns: List<com.cutviet.editor.model.DubTime.Slowdown> = emptyList(),
+            /** SourceLanguage name, empty for jobs from older versions. */
+            val language: String = "",
+            val phoneVoice: String? = null,
         )
 
         fun encode(
             out: DubbingPipeline.Output, sourceStartMs: Long, timings: Map<DubbingPipeline.Step, Long>,
             slowdowns: List<com.cutviet.editor.model.DubTime.Slowdown> = emptyList(),
+            language: SourceLanguage? = null,
+            phoneVoice: String? = null,
         ): JSONObject =
             JSONObject().apply {
                 put("slowdowns", JSONArray().apply {
@@ -252,6 +257,12 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                             put("file", s.file.absolutePath); put("durationMs", s.durationMs); put("rate", s.rate.toDouble())
                             put("playbackSpeed", s.playbackSpeed.toDouble())
                             s.speaker?.let { put("speaker", it) }
+                            s.voice?.let { v ->
+                                put("voice", JSONObject().apply {
+                                    put("gemini", v.gemini ?: ""); put("gender", v.gender?.name ?: ""); put("description", v.description)
+                                    put("emotion", v.emotion); put("pitch", v.pitch.toDouble())
+                                })
+                            }
                         })
                     }
                 })
@@ -261,6 +272,8 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                     })
                 }
                 put("sourceStartMs", sourceStartMs)
+                put("language", language?.name ?: "")
+                put("phoneVoice", phoneVoice ?: "")
                 put("gain", out.gain.toDouble())
                 put("timings", JSONObject().apply { timings.forEach { (k, v) -> put(k.name, v) } })
             }
@@ -275,6 +288,12 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                     File(o.getString("file")), o.getLong("durationMs"), o.getDouble("rate").toFloat(),
                     o.optDouble("playbackSpeed", 1.0).toFloat(),
                     o.optString("speaker").takeIf { it.isNotEmpty() },
+                    o.optJSONObject("voice")?.let { v ->
+                        LineVoice(
+                            v.optString("gemini").ifEmpty { null }, runCatching { Gender.valueOf(v.optString("gender")) }.getOrNull(),
+                            v.optString("description"), v.optString("emotion"), v.optDouble("pitch", 1.0).toFloat(),
+                        )
+                    },
                 )
             }
             val stems = root.optJSONObject("stems")?.let {
@@ -286,7 +305,10 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                     com.cutviet.editor.model.DubTime.Slowdown(o.getLong("startMs"), o.getLong("endMs"), o.getDouble("factor").toFloat())
                 }
             }.orEmpty()
-            return JobResult(segments, stems, root.optLong("sourceStartMs"), root.optDouble("gain", 1.0).toFloat(), slow)
+            return JobResult(
+                segments, stems, root.optLong("sourceStartMs"), root.optDouble("gain", 1.0).toFloat(), slow,
+                root.optString("language"), root.optString("phoneVoice").ifEmpty { null },
+            )
         }
     }
 }

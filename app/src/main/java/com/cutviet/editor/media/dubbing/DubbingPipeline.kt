@@ -100,7 +100,9 @@ class DubbingPipeline(
                 segments.forEachIndexed { i, seg ->
                     progress(Step.SPEAK, i.toFloat() / segments.size)
                     val g = genders[i]
-                    speak(i, seg, texts[i].trim(), room[i], settings.forGender(g))?.copy(speaker = g?.label)?.let(out::add)
+                    val phone = settings.forGender(g)
+                    speak(i, seg, texts[i].trim(), room[i], phone)
+                        ?.copy(speaker = g?.label, voice = LineVoice(null, g, pitch = phone.pitch))?.let(out::add)
                 }
                 out
             }
@@ -127,11 +129,14 @@ class DubbingPipeline(
             val slot = l.endMs - l.startMs
             val file = l.file
             if (file != null) {
-                out += DubbedSegment(start, slot, l.source, l.text, file, l.durationMs, 1f, l.speed, l.speaker)
+                val voice = l.voice?.let { LineVoice(it, l.gender, l.description, l.emotion) }
+                out += DubbedSegment(start, slot, l.source, l.text, file, l.durationMs, 1f, l.speed, l.speaker, voice)
             } else {
                 val seg = SpeechSegment(start, start + slot, l.source)
                 val g = if (s.distinguish) l.gender else null
-                speak(i, seg, l.text, l.roomMs, s.forGender(g), reword = false)?.copy(speaker = l.speaker)?.let(out::add)
+                val phone = s.forGender(g)
+                speak(i, seg, l.text, l.roomMs, phone, reword = false)
+                    ?.copy(speaker = l.speaker, voice = LineVoice(null, l.gender, l.description, l.emotion, phone.pitch))?.let(out::add)
             }
             progress(0.95f + 0.05f * (i + 1) / lines.size)
         }

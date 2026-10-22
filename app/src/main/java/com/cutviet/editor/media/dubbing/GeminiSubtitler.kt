@@ -29,6 +29,8 @@ class GeminiSubtitler(private val api: GeminiApi, private val model: String) {
         voice: FloatArray,
         ranges: List<SpeechDetector.Range>,
         language: SourceLanguage,
+        /** What is said around these segments, to translate one line again in context. */
+        context: String = "",
         progress: (Float) -> Unit,
     ): Heard {
         val speakers = LinkedHashMap<String, GeminiDubber.Speaker>()
@@ -38,10 +40,10 @@ class GeminiSubtitler(private val api: GeminiApi, private val model: String) {
             val what = "nghe ${b + 1}/${batches.size}"
             val known = speakers.values.toList()
             val answer = try {
-                api.interact(request(model, language, voice, ranges, indices, known, schema = true), what)
+                api.interact(request(model, language, voice, ranges, indices, known, schema = true, context = context), what)
             } catch (e: GeminiApi.Rejected) {
                 DubLog.w(TAG, "$what: refused with a schema, asking without: ${e.message}")
-                api.interact(request(model, language, voice, ranges, indices, known, schema = false), what)
+                api.interact(request(model, language, voice, ranges, indices, known, schema = false, context = context), what)
             }
             val text = GeminiApi.outputText(answer) ?: throw OnlineUnavailableException("Gemini không trả lời ($what)")
             val parsed = parse(text, indices.toSet()) ?: throw OnlineUnavailableException("Không đọc được câu trả lời của Gemini ($what)")
@@ -114,8 +116,9 @@ class GeminiSubtitler(private val api: GeminiApi, private val model: String) {
             indices: List<Int>,
             known: List<GeminiDubber.Speaker>,
             schema: Boolean,
+            context: String = "",
         ): JSONObject {
-            val input = JSONArray().put(text(prompt(language, indices.size, known)))
+            val input = JSONArray().put(text(prompt(language, indices.size, known, context)))
             for (i in indices) {
                 input.put(text("[S${i + 1}]"))
                 val r = ranges[i]
@@ -134,7 +137,7 @@ class GeminiSubtitler(private val api: GeminiApi, private val model: String) {
             }
         }
 
-        fun prompt(language: SourceLanguage, count: Int, known: List<GeminiDubber.Speaker> = emptyList()): String = buildString {
+        fun prompt(language: SourceLanguage, count: Int, known: List<GeminiDubber.Speaker> = emptyList(), context: String = ""): String = buildString {
             val lang = language.label.lowercase()
             append("Dưới đây là $count đoạn ghi âm lời nói $lang trong một video, đúng thứ tự thời gian, mỗi đoạn có nhãn [S<số>]. ")
             append("Làm phụ đề tiếng Việt cho video.\n")
@@ -153,6 +156,10 @@ class GeminiSubtitler(private val api: GeminiApi, private val model: String) {
             if (known.isNotEmpty()) {
                 append("Những người đã nhận ra ở phần trước của video (dùng lại mã nếu đúng là họ):\n")
                 known.forEach { append("- ${it.id}: ${it.gender?.name?.lowercase() ?: "?"}, ${it.description}\n") }
+            }
+            if (context.isNotBlank()) {
+                append("Ngữ cảnh (các câu ngay trước và sau trong video, chỉ để hiểu ý và cách xưng hô, không dịch lại):\n")
+                append(context.trim()).append('\n')
             }
             append("Đoạn không có lời nói rõ (chỉ có nhạc, tiếng ồn) thì vẫn trả về với turns rỗng. Không tự bịa lời.\n")
             append("Chỉ trả về JSON dạng {\"speakers\":[{\"id\":\"A\",\"gender\":\"male\",\"voice\":\"…\"}],")
