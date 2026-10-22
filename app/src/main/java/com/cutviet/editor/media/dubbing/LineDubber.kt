@@ -141,7 +141,7 @@ class LineDubber(private val context: Context, private val workDir: File, privat
                 val voice = decode16k(audio)
                 val range = SpeechDetector.Range(r.startMs - from, (r.endMs - from).coerceAtMost(voice.size / 16L))
                 val heard = GeminiSubtitler(api, DubSettings(context).geminiTextModel)
-                    .listen(voice, listOf(range), r.language, { progress(Step.LISTEN, it) }, context = r.around)
+                    .listen(voice, listOf(range), r.language, r.around) { progress(Step.LISTEN, it) }
                 val turns = heard.turns.filter { it.vi.isNotBlank() }
                 if (turns.isEmpty()) throw OnlineUnavailableException("Gemini không nghe ra lời nói ở câu này")
                 if (turns.map { it.speaker }.distinct().size > 1) DubLog.i(TAG, "${turns.size} turns of several people in one line, read in one voice")

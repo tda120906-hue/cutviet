@@ -29,9 +29,9 @@ class GeminiSubtitler(private val api: GeminiApi, private val model: String) {
         voice: FloatArray,
         ranges: List<SpeechDetector.Range>,
         language: SourceLanguage,
-        progress: (Float) -> Unit,
         /** What is said around these segments, to translate one line again in context. */
         context: String = "",
+        progress: (Float) -> Unit,
     ): Heard {
         val speakers = LinkedHashMap<String, GeminiDubber.Speaker>()
         val turns = ArrayList<Turn>()
