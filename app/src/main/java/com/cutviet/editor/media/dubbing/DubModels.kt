@@ -59,6 +59,20 @@ data class DubbedSegment(
     val playbackSpeed: Float = 1f,
     /** Who says it, as shown on the timeline ("Nam 1", "Nữ 2"), when speakers were told apart. */
     val speaker: String? = null,
+    /** The voice that read it, kept so the line can be dubbed again in the same voice. */
+    val voice: LineVoice? = null,
+)
+
+/**
+ * The voice of one dubbed line: a Gemini voice ([gemini], with the person's [description] and the
+ * line's [emotion]) or, when [gemini] is null, the phone's voice at [pitch].
+ */
+data class LineVoice(
+    val gemini: String?,
+    val gender: Gender?,
+    val description: String = "",
+    val emotion: String = "",
+    val pitch: Float = 1f,
 )
 
 /**
@@ -76,6 +90,10 @@ data class OnlineLine(
     val file: File?,
     val durationMs: Long,
     val speed: Float,
+    /** Gemini voice that read [file]; null when the phone reads it. */
+    val voice: String? = null,
+    val description: String = "",
+    val emotion: String = "",
 )
 
 /** Online dubbing of the speech [ranges] (ms) of [voice], 16 kHz mono. */

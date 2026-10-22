@@ -87,7 +87,10 @@ object ProjectOps {
      * One dubbed sentence: where it was spoken in the clip's source, and its audio file. [speaker]
      * ("Nam 1") prefixes the track's name when speakers were told apart.
      */
-    data class DubLine(val sourceStartMs: Long, val uri: String, val durationMs: Long, val text: String, val speed: Float = 1f, val speaker: String? = null)
+    data class DubLine(
+        val sourceStartMs: Long, val uri: String, val durationMs: Long, val text: String, val speed: Float = 1f, val speaker: String? = null,
+        val info: DubInfo? = null,
+    )
 
     /**
      * The clip's sound split in two: [voiceUri] and [backgroundUri] start at [sourceStartMs] of the
@@ -117,6 +120,7 @@ object ProjectOps {
             AudioTrack(
                 kind = AudioKind.DUB, uri = it.uri, name = (it.speaker?.let { s -> "$s: " }.orEmpty() + it.text.trim()).take(40), sourceDurationMs = it.durationMs,
                 startMs = timelineAt(it.sourceStartMs), volume = dubVolume.coerceIn(0f, 4f), speed = it.speed.coerceIn(0.5f, 2f),
+                dub = it.info,
             )
         }
         val stemTracks = stems?.let { st ->
@@ -164,6 +168,62 @@ object ProjectOps {
             subtitles = if (delta == 0L) p.subtitles else p.subtitles.map { it.copy(startMs = inClip(it.startMs), endMs = inClip(it.endMs)) },
         )
     }
+
+    /** Where [sourceMs] of the video [uri] plays on the timeline (the first clip showing it), or null. */
+    fun timelineOfSource(p: Project, uri: String, sourceMs: Long): Long? {
+        var t = 0L
+        for (c in p.clips) {
+            if (!c.isImage && c.uri == uri && sourceMs >= c.trimStartMs && sourceMs < c.trimEndMs) {
+                return t + ((sourceMs - c.trimStartMs) / c.speed).toLong()
+            }
+            t += c.durationMs
+        }
+        return null
+    }
+
+    /**
+     * Where the DUB track [a] comes from. Lines dubbed before this was saved get it from the clip
+     * under the line: its source time there, the line's length, and the speaker in its name.
+     */
+    fun dubOrigin(p: Project, a: AudioTrack): DubInfo? {
+        a.dub?.let { return it }
+        val (index, offset) = p.clipAt(a.startMs) ?: return null
+        val c = p.clips[index]
+        if (c.isImage) return null
+        val start = c.sourceTimeAt(offset)
+        val end = minOf(c.trimEndMs, start + (a.durationMs * c.speed).toLong()).coerceAtLeast(start + 300)
+        val speaker = a.name.substringBefore(": ", "").takeIf { Regex("^(Nam|Nữ|Trẻ em) \\d+$").matches(it) }
+        val gender = when {
+            speaker == null -> null
+            speaker.startsWith("Nam") -> "MALE"
+            speaker.startsWith("Nữ") -> "FEMALE"
+            else -> "CHILD"
+        }
+        return DubInfo(c.uri, start, end, text = if (speaker != null) a.name.substringAfter(": ") else a.name, speaker = speaker, gender = gender)
+    }
+
+    /**
+     * Room a dubbed line has on the timeline: up to the next DUB line (less a small gap), at most
+     * [maxSpillMs] past [slotMs], never less than [slotMs].
+     */
+    fun dubRoom(p: Project, a: AudioTrack, slotMs: Long, gapMs: Long, maxSpillMs: Long): Long {
+        val next = p.audios.filter { it.kind == AudioKind.DUB && it.id != a.id && it.startMs > a.startMs }.minOfOrNull { it.startMs }
+        val free = if (next != null) next - gapMs - a.startMs else slotMs + maxSpillMs
+        return maxOf(slotMs, minOf(free, slotMs + maxSpillMs))
+    }
+
+    /** Puts a dubbed-again line in place of DUB track [id], where it was. */
+    fun replaceDubLine(p: Project, id: String, uri: String, durationMs: Long, speed: Float, volume: Float, info: DubInfo): Project =
+        p.copy(
+            audios = p.audios.map { a ->
+                if (a.id != id) a
+                else a.copy(
+                    uri = uri, name = (info.speaker?.let { "$it: " }.orEmpty() + info.text.trim()).take(40),
+                    sourceDurationMs = durationMs, sourceStartMs = 0, sourceEndMs = durationMs,
+                    speed = speed.coerceIn(0.5f, 2f), volume = volume.coerceIn(0f, 4f), dub = info,
+                )
+            },
+        )
 
     fun restackOverlay(p: Project, id: String, delta: Int): Project {
         val i = p.overlays.indexOfFirst { it.id == id }

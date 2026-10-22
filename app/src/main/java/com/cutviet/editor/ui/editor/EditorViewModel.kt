@@ -18,6 +18,10 @@ import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.cutviet.editor.media.dubbing.DubbingPipeline
 import com.cutviet.editor.media.dubbing.DubbingWorker
+import com.cutviet.editor.media.dubbing.LineDubWorker
+import com.cutviet.editor.media.dubbing.LineDubber
+import com.cutviet.editor.media.dubbing.RedubChoices
+import com.cutviet.editor.media.dubbing.VoiceChoice
 import com.cutviet.editor.media.dubbing.SourceLanguage
 import com.cutviet.editor.media.dubbing.SubtitlePipeline
 import com.cutviet.editor.media.dubbing.SubtitleWorker
@@ -29,6 +33,7 @@ import com.cutviet.editor.media.MediaProbe
 import com.cutviet.editor.media.VoiceEngine
 import com.cutviet.editor.model.AudioKind
 import com.cutviet.editor.model.AudioTrack
+import com.cutviet.editor.model.DubInfo
 import com.cutviet.editor.model.Overlay
 import com.cutviet.editor.model.VoiceSpec
 import com.cutviet.editor.model.newId
@@ -750,8 +755,15 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
             toast = "Không đặt được kết quả lồng tiếng (đoạn video đã bị xoá?)."
             return
         }
+        val sourceUri = project.clips[at].uri
         val lines = result.segments.map {
-            ProjectOps.DubLine(it.startMs, Uri.fromFile(it.file).toString(), it.durationMs, it.text, it.playbackSpeed, it.speaker)
+            val v = it.voice
+            val info = DubInfo(
+                sourceUri, it.startMs, it.startMs + it.slotMs, it.sourceText, it.text, result.language, it.speaker,
+                geminiVoice = v?.gemini, gender = v?.gender?.name, description = v?.description.orEmpty(),
+                emotion = v?.emotion.orEmpty(), phoneVoice = result.phoneVoice, pitch = v?.pitch ?: 1f,
+            )
+            ProjectOps.DubLine(it.startMs, Uri.fromFile(it.file).toString(), it.durationMs, it.text, it.playbackSpeed, it.speaker, info)
         }
         val stems = result.stems?.let {
             ProjectOps.DubStems(Uri.fromFile(it.voice).toString(), Uri.fromFile(it.background).toString(), result.sourceStartMs, it.durationMs)
@@ -773,6 +785,107 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
 
     fun cancelDubbing() {
         WorkManager.getInstance(getApplication<Application>()).cancelUniqueWork(DubbingWorker.UNIQUE_NAME)
+    }
+
+    // ---- dub one line again ----
+
+    /** DUB track the "Lồng lại câu này" dialog is open for. */
+    var redubTrackId by mutableStateOf<String?>(null)
+
+    /** Progress line of the running "dub one line again" job, or null. */
+    var redubStatus by mutableStateOf<String?>(null)
+        private set
+
+    init {
+        watchRedub()
+    }
+
+    fun openRedub() {
+        val a = selectedAudio?.takeIf { it.kind == AudioKind.DUB } ?: return
+        if (ProjectOps.dubOrigin(project, a) == null) {
+            toast = "Không tìm thấy đoạn video của câu này."
+            return
+        }
+        redubTrackId = a.id
+    }
+
+    /**
+     * Dubs DUB track [trackId] again in the background: listened to and translated again when
+     * [text] is null, else [text] read as is, in [choice]'s voice. The new line takes the old
+     * one's place when done.
+     */
+    fun startRedub(trackId: String, text: String?, choice: VoiceChoice, language: SourceLanguage) {
+        val a = project.audios.firstOrNull { it.id == trackId } ?: return
+        val info = ProjectOps.dubOrigin(project, a) ?: return
+        if (redubStatus != null) {
+            toast = "Đang lồng lại một câu khác."
+            return
+        }
+        // Time the line has on the timeline (longer where the video was slowed for it).
+        val end = ProjectOps.timelineOfSource(project, info.sourceUri, info.sourceEndMs - 1)?.plus(1)
+        val slot = (end?.minus(a.startMs) ?: (info.sourceEndMs - info.sourceStartMs)).coerceAtLeast(300)
+        val room = ProjectOps.dubRoom(project, a, slot, DubbingPipeline.GAP_MS, DubbingPipeline.MAX_SPILL_MS)
+        val request = LineDubber.Request(
+            info.sourceUri, info.sourceStartMs, info.sourceEndMs, room, language, text?.trim(), info.sourceText,
+            RedubChoices.around(project, a), choice.voice, info.phoneVoice, choice.speaker,
+        )
+        LineDubWorker.enqueue(getApplication(), project.id, a.id, request)
+        redubStatus = "Đang chuẩn bị lồng lại câu…"
+        redubTrackId = null
+    }
+
+    fun cancelRedub() {
+        WorkManager.getInstance(getApplication<Application>()).cancelUniqueWork(LineDubWorker.UNIQUE_NAME)
+    }
+
+    private fun watchRedub() {
+        val app = getApplication<Application>()
+        viewModelScope.launch {
+            WorkManager.getInstance(app).getWorkInfosForUniqueWorkFlow(LineDubWorker.UNIQUE_NAME).collect { infos ->
+                val info = infos.lastOrNull { it.tags.contains(DubbingWorker.projectTag(project.id)) } ?: return@collect
+                if (!info.state.isFinished) {
+                    val step = info.progress.getString(LineDubWorker.KEY_STEP)
+                        ?.let { runCatching { LineDubber.Step.valueOf(it) }.getOrNull() }
+                    val pct = (info.progress.getFloat(LineDubWorker.KEY_PROGRESS, 0f) * 100).toInt()
+                    redubStatus = if (step != null) "Lồng lại câu: ${step.label}… $pct%" else "Đang chuẩn bị lồng lại câu…"
+                    return@collect
+                }
+                val wasRunning = redubStatus != null
+                redubStatus = null
+                when (info.state) {
+                    WorkInfo.State.SUCCEEDED -> applyRedubResult(app, info)
+                    WorkInfo.State.FAILED -> if (wasRunning) toast = info.outputData.getString(LineDubWorker.KEY_ERROR) ?: "Lồng lại thất bại."
+                    else -> if (wasRunning) toast = "Đã huỷ lồng lại câu."
+                }
+            }
+        }
+    }
+
+    private suspend fun applyRedubResult(app: Application, info: WorkInfo) {
+        val file = LineDubWorker.resultFile(app, info.id.toString())
+        if (!file.exists()) return // already applied
+        val result = withContext(Dispatchers.IO) {
+            runCatching { LineDubWorker.decode(file.readText()) }.getOrNull().also { file.renameTo(File(file.parentFile, "line_applied.json")) }
+        }
+        val trackId = info.tags.firstOrNull { it.startsWith("track:") }?.removePrefix("track:")
+        if (result == null || project.audios.none { it.id == trackId }) {
+            toast = "Không đặt được câu lồng lại (câu cũ đã bị xoá?)."
+            return
+        }
+        val r = result.request
+        val dub = DubInfo(
+            r.sourceUri, r.startMs, r.endMs, result.sourceText, result.text, r.language.name, r.speaker,
+            geminiVoice = r.voice.gemini, gender = r.voice.gender?.name, description = r.voice.description,
+            emotion = result.emotion, phoneVoice = r.phoneVoice, pitch = r.voice.pitch,
+        )
+        commit(ProjectOps.replaceDubLine(project, trackId!!, Uri.fromFile(result.file).toString(), result.durationMs, result.playbackSpeed, result.gain, dub))
+        selectedAudioId = trackId
+        toast = buildString {
+            append("Đã lồng lại câu")
+            append(if (info.outputData.getBoolean(LineDubWorker.KEY_ONLINE, false)) " (online)" else " (offline)")
+            append(": \"${result.text.take(60)}\"")
+            info.outputData.getString(LineDubWorker.KEY_NOTE)?.let { append(". Lưu ý: $it") }
+        }
     }
 
     // ---- subtitles ----

@@ -151,6 +151,30 @@ data class VoiceSpec(
     val rate: Float = 1f,
 )
 
+/**
+ * A dubbed line's origin: [sourceStartMs]..[sourceEndMs] of the video [sourceUri] (its own time,
+ * not the timeline's), what was said and how it was translated, and the voice that reads it:
+ * a Gemini voice ([geminiVoice], described by [description]) or the phone's ([phoneVoice] at [pitch]).
+ */
+data class DubInfo(
+    val sourceUri: String,
+    val sourceStartMs: Long,
+    val sourceEndMs: Long,
+    val sourceText: String = "",
+    val text: String = "",
+    /** SourceLanguage name ("ENGLISH", "CHINESE"). */
+    val language: String = "",
+    /** "Nam 1", "Nữ 2"… when speakers were told apart. */
+    val speaker: String? = null,
+    val geminiVoice: String? = null,
+    /** Gender name ("MALE", "FEMALE", "CHILD"), or null. */
+    val gender: String? = null,
+    val description: String = "",
+    val emotion: String = "",
+    val phoneVoice: String? = null,
+    val pitch: Float = 1f,
+)
+
 /** An audio layer placed on the timeline (music, audio extracted from a clip, or a voice-over). */
 data class AudioTrack(
     val id: String = newId(),
@@ -167,6 +191,8 @@ data class AudioTrack(
     /** Repeat until the end of the video (music only). */
     val loop: Boolean = false,
     val voice: VoiceSpec? = null,
+    /** Where a dubbed line comes from and who reads it (DUB tracks), so the line can be dubbed again. */
+    val dub: DubInfo? = null,
 ) {
     /** Length of one pass on the timeline. */
     val durationMs: Long get() = ((sourceEndMs - sourceStartMs) / speed).toLong()

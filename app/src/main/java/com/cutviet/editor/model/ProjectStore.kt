@@ -110,7 +110,25 @@ class ProjectStore(context: Context) {
                     put("rate", v.rate.toDouble())
                 })
             }
+            a.dub?.let { put("dub", dubJson(it)) }
         }
+
+        fun dubJson(d: DubInfo) = JSONObject().apply {
+            put("sourceUri", d.sourceUri); put("sourceStartMs", d.sourceStartMs); put("sourceEndMs", d.sourceEndMs)
+            put("sourceText", d.sourceText); put("text", d.text); put("language", d.language)
+            put("speaker", d.speaker ?: ""); put("geminiVoice", d.geminiVoice ?: ""); put("gender", d.gender ?: "")
+            put("description", d.description); put("emotion", d.emotion); put("phoneVoice", d.phoneVoice ?: "")
+            put("pitch", d.pitch.toDouble())
+        }
+
+        fun dubFrom(o: JSONObject) = DubInfo(
+            sourceUri = o.getString("sourceUri"), sourceStartMs = o.getLong("sourceStartMs"), sourceEndMs = o.getLong("sourceEndMs"),
+            sourceText = o.optString("sourceText"), text = o.optString("text"), language = o.optString("language"),
+            speaker = o.optString("speaker").ifEmpty { null }, geminiVoice = o.optString("geminiVoice").ifEmpty { null },
+            gender = o.optString("gender").ifEmpty { null }, description = o.optString("description"),
+            emotion = o.optString("emotion"), phoneVoice = o.optString("phoneVoice").ifEmpty { null },
+            pitch = o.optDouble("pitch", 1.0).toFloat(),
+        )
 
         private fun clipJson(c: Clip) = JSONObject().apply {
             put("id", c.id); put("uri", c.uri); put("mime", c.mime ?: ""); put("isImage", c.isImage)
@@ -216,6 +234,7 @@ class ProjectStore(context: Context) {
                     pitch = v.optDouble("pitch", 1.0).toFloat(), rate = v.optDouble("rate", 1.0).toFloat(),
                 )
             },
+            dub = o.optJSONObject("dub")?.let { runCatching { dubFrom(it) }.getOrNull() },
         )
 
         private fun clipFrom(o: JSONObject): Clip {

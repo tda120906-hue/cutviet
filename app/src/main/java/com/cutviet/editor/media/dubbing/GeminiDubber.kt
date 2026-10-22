@@ -123,7 +123,10 @@ class GeminiDubber(
                         "\"${l.source.take(50)}\" → \"${texts.getValue(l.index).take(50)}\"" +
                         (if (v != null) " measured=${v.ms}ms room=${room[l.index]}ms speed=$speed" else ""),
                 )
-                OnlineLine(r.startMs, r.endMs, room[l.index], l.source, texts.getValue(l.index), role.label, role.gender, v?.file, v?.ms ?: 0, speed)
+                OnlineLine(
+                    r.startMs, r.endMs, room[l.index], l.source, texts.getValue(l.index), role.label, role.gender, v?.file, v?.ms ?: 0, speed,
+                    voice = if (v != null) role.voice else null, description = role.description, emotion = l.emotion,
+                )
             }
         } finally {
             api.shutdown()
