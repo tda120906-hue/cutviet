@@ -76,6 +76,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import kotlin.math.roundToInt
 
 /** "Dịch lồng tiếng": start a dub of the selected clip, and manage models and keys. */
 @Composable
@@ -180,6 +181,23 @@ private fun DubTab(vm: EditorViewModel, settings: DubSettings, onOpenModels: () 
     Label("Giọng gốc: ${if (original == 0f) "xoá hẳn" else "${(original * 100).toInt()}%"}")
     Slider(value = original, onValueChange = { original = it }, onValueChangeFinished = { settings.originalVolume = original }, valueRange = 0f..0.5f)
     Text("Âm thanh nền (tạp âm, tiếng đồ vật, nhạc) luôn được giữ nguyên khi đã tải model tách giọng.", color = TextDim, fontSize = 12.sp)
+
+    var maxDub by remember { mutableFloatStateOf(settings.maxDubSpeed) }
+    var minVideo by remember { mutableFloatStateOf(settings.minVideoSpeed) }
+    Label("Câu lồng tiếng dài hơn lời gốc")
+    Text(
+        "Ưu tiên rút gọn câu dịch. Còn dài thì tua nhanh giọng tới x1,2 rồi làm chậm video tới x0,9 (gần như không nhận ra); " +
+            "chỉ câu nào vẫn dài mới dùng tới hai mức tối đa dưới đây.",
+        color = TextDim, fontSize = 12.sp,
+    )
+    Text("Tua nhanh giọng tối đa: x${"%.2f".format(maxDub)}", color = Color.White, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
+    Slider(value = maxDub, onValueChange = { maxDub = (it * 20).roundToInt() / 20f }, onValueChangeFinished = { settings.maxDubSpeed = maxDub }, valueRange = 1f..1.4f, steps = 7)
+    Text(
+        "Làm chậm video tối đa: " + if (minVideo >= 0.999f) "không làm chậm" else "x${"%.2f".format(minVideo)}",
+        color = Color.White, fontSize = 13.sp,
+    )
+    Slider(value = minVideo, onValueChange = { minVideo = (it * 20).roundToInt() / 20f }, onValueChangeFinished = { settings.minVideoSpeed = minVideo }, valueRange = 0.8f..1f, steps = 3)
+    Text("Gợi ý: x1,25 và x0,85. Đẩy lên x1,4 giọng nghe vội rõ; video x0,8 thấy chậm ở cảnh nhiều chuyển động.", color = TextDim, fontSize = 12.sp)
 
     Spacer(Modifier.height(12.dp))
     val missing = missingModels(context, mode, settings)

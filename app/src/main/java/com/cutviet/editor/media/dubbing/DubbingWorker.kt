@@ -84,12 +84,29 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
             val timings = pipeline.timings.entries.joinToString { "${it.key.name}=${it.value}ms" }
             DubLog.i(DubbingPipeline.TAG, "job $id done: ${out.segments.size} lines, separated=${out.stems != null}, online=${out.usedOnline}, fallback=${out.fallbackReason}, notice=${out.notice}, $timings")
             if (out.segments.isEmpty()) return fail("Không nghe thấy lời nói nào trong video")
-            resultFile(applicationContext, id.toString()).writeText(encode(out, sourceStart, pipeline.timings).toString())
+            // Lines still too long: dub a little faster, then the video under them a little slower.
+            val dubSettings = DubSettings(applicationContext)
+            val fitted = DubFitting.fit(out.segments, sourceStart, sourceEnd, dubSettings.maxDubSpeed, dubSettings.minVideoSpeed)
+            fitted.segments.filter { it.playbackSpeed > 1.001f }.forEach {
+                DubLog.i(DubbingPipeline.TAG, "line at ${it.startMs}ms: ${it.durationMs}ms (TTS rate ${it.rate}) played x${"%.2f".format(it.playbackSpeed)}")
+            }
+            var slowdowns = fitted.slowdowns
+            var stems = out.stems
+            if (stems != null && slowdowns.isNotEmpty()) {
+                // The background must slow down with the picture; if it cannot, the video is not slowed either.
+                stems = stretchStems(stems, sourceStart, slowdowns, dir) ?: stems.also { slowdowns = emptyList() }
+            }
+            if (slowdowns.isNotEmpty()) {
+                DubLog.i(DubbingPipeline.TAG, "video slowed in ${slowdowns.size} places: " + slowdowns.joinToString { "${it.startMs}-${it.endMs}ms x${"%.2f".format(it.factor)}" })
+            }
+            val finished = DubbingPipeline.Output(fitted.segments, stems, out.gain, out.usedOnline, out.fallbackReason, out.notice)
+            resultFile(applicationContext, id.toString()).writeText(encode(finished, sourceStart, pipeline.timings, slowdowns).toString())
             return Result.success(
                 workDataOf(
                     KEY_COUNT to out.segments.size, KEY_SEPARATED to (out.stems != null),
                     KEY_ONLINE to out.usedOnline, KEY_FALLBACK to out.fallbackReason, KEY_NOTE to out.notice,
                     KEY_SPEAKERS to out.segments.mapNotNull { it.speaker }.distinct().size,
+                    KEY_SLOWED to slowdowns.size,
                 ),
             )
         } catch (e: StepUnavailableException) {
@@ -103,6 +120,16 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         } finally {
             withContext(NonCancellable + Dispatchers.Main) { voice.shutdown() }
         }
+    }
+
+    /** Background and voice stretched like the video, or null if that fails. */
+    private fun stretchStems(st: Stems, originMs: Long, slowdowns: List<com.cutviet.editor.model.DubTime.Slowdown>, dir: File): Stems? {
+        val bg = File(dir, "background_fit.wav")
+        val voice = File(dir, "voice_fit.wav")
+        val bgMs = StemStretcher.stretch(st.background, bg, originMs, slowdowns, VoiceSeparator.RATE, 2)
+        val voiceMs = StemStretcher.stretch(st.voice, voice, originMs, slowdowns, VoiceSeparator.RATE, 2)
+        if (bgMs == null || voiceMs == null) return null
+        return Stems(voice, bg, minOf(bgMs, voiceMs))
     }
 
     private fun error(message: String) = workDataOf(KEY_ERROR to message)
@@ -167,6 +194,8 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         const val KEY_NOTE = "note"
         /** Result: how many distinct voices the dub uses (0 when speakers were not told apart). */
         const val KEY_SPEAKERS = "speakers"
+        /** Result: how many stretches of video play slower so long lines fit. */
+        const val KEY_SLOWED = "slowed"
         private const val CHANNEL = "dubbing"
         private const val NOTIFICATION_ID = 4107
         /** One dubbing job at a time. */
@@ -202,10 +231,19 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         fun resultFile(context: Context, jobId: String) = File(jobDir(context, jobId), "result.json")
 
         /** What a finished job hands back to the editor. */
-        class JobResult(val segments: List<DubbedSegment>, val stems: Stems?, val sourceStartMs: Long, val gain: Float)
+        class JobResult(
+            val segments: List<DubbedSegment>, val stems: Stems?, val sourceStartMs: Long, val gain: Float,
+            val slowdowns: List<com.cutviet.editor.model.DubTime.Slowdown> = emptyList(),
+        )
 
-        fun encode(out: DubbingPipeline.Output, sourceStartMs: Long, timings: Map<DubbingPipeline.Step, Long>): JSONObject =
+        fun encode(
+            out: DubbingPipeline.Output, sourceStartMs: Long, timings: Map<DubbingPipeline.Step, Long>,
+            slowdowns: List<com.cutviet.editor.model.DubTime.Slowdown> = emptyList(),
+        ): JSONObject =
             JSONObject().apply {
+                put("slowdowns", JSONArray().apply {
+                    slowdowns.forEach { put(JSONObject().put("startMs", it.startMs).put("endMs", it.endMs).put("factor", it.factor.toDouble())) }
+                })
                 put("segments", JSONArray().apply {
                     out.segments.forEach { s ->
                         put(JSONObject().apply {
@@ -242,7 +280,13 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
             val stems = root.optJSONObject("stems")?.let {
                 Stems(File(it.getString("voice")), File(it.getString("background")), it.getLong("durationMs"))
             }
-            return JobResult(segments, stems, root.optLong("sourceStartMs"), root.optDouble("gain", 1.0).toFloat())
+            val slow = root.optJSONArray("slowdowns")?.let { a ->
+                (0 until a.length()).map { i ->
+                    val o = a.getJSONObject(i)
+                    com.cutviet.editor.model.DubTime.Slowdown(o.getLong("startMs"), o.getLong("endMs"), o.getDouble("factor").toFloat())
+                }
+            }.orEmpty()
+            return JobResult(segments, stems, root.optLong("sourceStartMs"), root.optDouble("gain", 1.0).toFloat(), slow)
         }
     }
 }
