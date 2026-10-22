@@ -61,6 +61,8 @@ object CompositionFactory {
         /** Overlay pictures as video layers (their sound follows [includeAudioTracks]). */
         val includeOverlays: Boolean = true,
         val includeSpeed: Boolean = true,
+        /** Burn the project's subtitles into the picture (export; the editor draws them itself). */
+        val includeSubtitles: Boolean = false,
         val hdrMode: Int = Composition.HDR_MODE_KEEP_HDR,
     )
 
@@ -80,16 +82,30 @@ object CompositionFactory {
 
         val placed = project.overlays.filter { it.startMs < total && it.durationMs > 0 }
         val overlays = if (o.includeOverlays) placed else emptyList()
-        if (overlays.isEmpty()) {
+        val subtitles = if (o.includeSubtitles) project.subtitles.filter { it.text.isNotBlank() && it.startMs < total } else emptyList()
+        if (overlays.isEmpty() && subtitles.isEmpty()) {
             videoSequences += main
         } else {
             // Media3's compositor draws the first sequence on top and takes output timestamps from it.
             // Sequence 0 is an invisible full-length frame clock at the source frame rate, then the overlays
-            // (newest on top), then the main track at the bottom.
+            // (newest on top), then the main track at the bottom. Subtitles are drawn on the clock
+            // layer: its frame times are the timeline's, and it is the top layer.
             val transparent = transparentImageUri(context)
             val fps = project.clips.filter { !it.isImage }.maxOfOrNull { it.frameRate }?.roundToInt()?.coerceIn(24, 120) ?: 30
+            val clock = fillerItem(transparent, total, fps).let { item ->
+                if (subtitles.isEmpty()) item
+                else item.buildUpon().setEffects(
+                    Effects(
+                        emptyList(),
+                        listOf(
+                            Presentation.createForWidthAndHeight(o.width, o.height, Presentation.LAYOUT_STRETCH_TO_FIT),
+                            OverlayEffect(ImmutableList.of<TextureOverlay>(SubtitleOverlay(subtitles, project.subtitleStyle))),
+                        ),
+                    ),
+                ).build()
+            }
             videoSequences += EditedMediaItemSequence.Builder(VIDEO_ONLY)
-                .addItem(fillerItem(transparent, total, fps))
+                .addItem(clock)
                 .build()
             overlays.asReversed().forEach { ov ->
                 val visibleMs = minOf(ov.durationMs, total - ov.startMs)
@@ -113,7 +129,7 @@ object CompositionFactory {
         }
 
         val builder = Composition.Builder(videoSequences + audioSequences).setHdrMode(o.hdrMode)
-        if (overlayByIndex.isNotEmpty()) builder.setVideoCompositorSettings(LayerSettings(o.width, o.height, overlayByIndex))
+        if (videoSequences.size > 1) builder.setVideoCompositorSettings(LayerSettings(o.width, o.height, overlayByIndex, showClock = subtitles.isNotEmpty()))
         return builder.build()
     }
 
@@ -122,6 +138,8 @@ object CompositionFactory {
         private val width: Int,
         private val height: Int,
         private val overlays: Map<Int, Overlay>,
+        /** The clock layer carries the subtitles. */
+        private val showClock: Boolean,
     ) : VideoCompositorSettings {
         private val hidden = StaticOverlaySettings.Builder().setAlphaScale(0f).build()
         private val full = StaticOverlaySettings.Builder().build()
@@ -138,7 +156,7 @@ object CompositionFactory {
 
         override fun getOverlaySettings(inputId: Int, presentationTimeUs: Long): OverlaySettings =
             when (inputId) {
-                0 -> hidden
+                0 -> if (showClock) full else hidden
                 else -> settings[inputId] ?: full
             }
     }

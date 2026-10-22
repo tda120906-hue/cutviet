@@ -17,7 +17,12 @@ import java.io.File
  *
  * Whisper is fully released before this runs, so the two big models never share RAM.
  */
-class GemmaTranslator(private val context: Context, private val model: File) : TextTranslator {
+class GemmaTranslator(
+    private val context: Context,
+    private val model: File,
+    /** Translate for subtitles (no syllable limits) instead of for dubbing. */
+    private val subtitles: Boolean = false,
+) : TextTranslator {
     private var backend = "?"
     /** Kept loaded after [translate] for [shorten]; loading takes over a minute. */
     private var llm: LlmInference? = null
@@ -35,11 +40,13 @@ class GemmaTranslator(private val context: Context, private val model: File) : T
                 val limits = budgets.subList(i, end)
                 val ctx = segments.subList(maxOf(0, i - TranslationPrompt.CONTEXT), i)
                 val tw = SystemClock.elapsedRealtime()
-                val parsed = TranslationPrompt.parse(ask(llm, TranslationPrompt.build(language, ctx, lines, limits)), lines.size)
+                fun prompt(of: List<SpeechSegment>, max: List<Int>) =
+                    if (subtitles) TranslationPrompt.buildSubtitles(language, ctx, of) else TranslationPrompt.build(language, ctx, of, max)
+                val parsed = TranslationPrompt.parse(ask(llm, prompt(lines, limits)), lines.size)
                 DubLog.i(TAG, "lines ${i + 1}-$end: ${SystemClock.elapsedRealtime() - tw} ms, read ${parsed?.count { it != null } ?: 0}/${lines.size}")
                 lines.forEachIndexed { k, s ->
                     val text = parsed?.getOrNull(k)
-                        ?: TranslationPrompt.parse(ask(llm, TranslationPrompt.build(language, ctx, listOf(s), listOf(limits[k]))), 1)?.firstOrNull()
+                        ?: TranslationPrompt.parse(ask(llm, prompt(listOf(s), listOf(limits[k]))), 1)?.firstOrNull()
                         ?: s.text
                     out += text
                 }

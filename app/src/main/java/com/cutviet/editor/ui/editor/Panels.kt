@@ -128,6 +128,7 @@ fun PanelHost(vm: EditorViewModel, panel: Panel, modifier: Modifier = Modifier.h
                 Panel.VOICE -> VoicePanel(vm)
                 Panel.CANVAS -> CanvasPanel(vm)
                 Panel.DURATION -> DurationPanel(vm)
+                Panel.SUBTITLE -> SubtitlePanel(vm)
             }
             Spacer(Modifier.height(12.dp))
         }
@@ -137,7 +138,7 @@ fun PanelHost(vm: EditorViewModel, panel: Panel, modifier: Modifier = Modifier.h
 // ---------- shared widgets ----------
 
 @Composable
-private fun LabeledSlider(
+internal fun LabeledSlider(
     label: String,
     value: Float,
     range: ClosedFloatingPointRange<Float>,
@@ -166,7 +167,7 @@ private fun sliderColors() = SliderDefaults.colors(
 )
 
 @Composable
-private fun Chip(text: String, selected: Boolean, onClick: () -> Unit) {
+internal fun Chip(text: String, selected: Boolean, onClick: () -> Unit) {
     FilterChip(
         selected = selected,
         onClick = onClick,

@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.VerticalAlignCenter
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Crop
@@ -190,6 +191,7 @@ private fun EditorContent(vm: EditorViewModel, onBack: () -> Unit) {
                 modifier = Modifier.fillMaxSize(),
             )
             OverlayPreview(vm, Modifier.fillMaxSize())
+            SubtitlePreview(vm, Modifier.fillMaxSize())
             OverlayGizmo(vm, Modifier.fillMaxSize())
             if (vm.project.clips.isEmpty()) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -239,6 +241,7 @@ private fun EditorContent(vm: EditorViewModel, onBack: () -> Unit) {
             PanelHost(vm, panel, Modifier.height(if (typing) 220.dp else 290.dp))
         } else {
             vm.dubStatus?.let { DubbingBanner(it, onOpen = { vm.showDubbing = true }) }
+            vm.subtitleStatus?.let { SubtitleBanner(it, onOpen = { vm.openPanel(Panel.SUBTITLE) }) }
             Toolbar(vm, onAddMedia = { addMedia() }, onAddMusic = { addMusic() }, onAddOverlay = { addOverlay() })
         }
     }
@@ -256,7 +259,14 @@ private fun EditorContent(vm: EditorViewModel, onBack: () -> Unit) {
     vm.eraserOverlayId?.let { id ->
         vm.project.overlays.firstOrNull { it.id == id }?.let { EraserDialog(vm, it) }
     }
-    if (vm.showDubbing) DubbingDialog(vm, onDismiss = { vm.showDubbing = false })
+    if (vm.showDubbing) DubbingDialog(vm, onDismiss = { vm.showDubbing = false; vm.dubbingTab = 0 }, initialTab = vm.dubbingTab)
+    if (vm.showSubtitleDialog) {
+        SubtitleDialog(vm, onDismiss = { vm.showSubtitleDialog = false }, onOpenModels = {
+            vm.showSubtitleDialog = false
+            vm.dubbingTab = 1
+            vm.showDubbing = true
+        })
+    }
 }
 
 @Composable
@@ -340,6 +350,7 @@ private fun Toolbar(vm: EditorViewModel, onAddMedia: () -> Unit, onAddMusic: () 
                 add(Tool("Tách âm thanh", Icons.AutoMirrored.Filled.CallSplit) { vm.extractAudioFromSelected() })
                 add(Tool("Lồng tiếng AI", Icons.Filled.Translate) { vm.showDubbing = true })
             }
+            add(Tool("Phụ đề AI", Icons.Filled.ClosedCaption) { vm.openSubtitles() })
             add(Tool("Bộ lọc", Icons.Filled.AutoAwesome) { vm.openPanel(Panel.FILTER) })
             add(Tool("Điều chỉnh", Icons.Filled.Tune) { vm.openPanel(Panel.ADJUST) })
             add(Tool("Văn bản", Icons.Filled.Title) { vm.openPanel(Panel.TEXT) })
@@ -357,6 +368,7 @@ private fun Toolbar(vm: EditorViewModel, onAddMedia: () -> Unit, onAddMusic: () 
             Tool("Âm thanh", Icons.Filled.MusicNote) { onAddMusic() },
             Tool("Lớp phủ", Icons.Filled.Layers) { onAddOverlay() },
             Tool("Giọng đọc AI", Icons.Filled.RecordVoiceOver) { vm.openPanel(Panel.VOICE) },
+            Tool("Phụ đề AI", Icons.Filled.ClosedCaption) { vm.openSubtitles() },
             Tool("Lồng tiếng AI", Icons.Filled.Translate) { vm.showDubbing = true },
             Tool("Văn bản", Icons.Filled.Title) { clipTool(Panel.TEXT) },
             Tool("Nhãn dán", Icons.Filled.EmojiEmotions) { clipTool(Panel.STICKER) },

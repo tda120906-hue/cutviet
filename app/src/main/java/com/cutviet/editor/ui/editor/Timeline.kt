@@ -203,6 +203,7 @@ fun Timeline(
                 Spacer(Modifier.width(half))
             }
             Spacer(Modifier.height(6.dp))
+            SubtitleLane(vm, half, totalWidth, pxPerMs)
 
             // Audio lanes (music, extracted sound, voice-overs).
             val total = project.durationMs

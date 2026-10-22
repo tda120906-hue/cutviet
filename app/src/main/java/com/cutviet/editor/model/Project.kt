@@ -248,12 +248,34 @@ data class Overlay(
     val endMs: Long get() = startMs + durationMs
 }
 
+/** One subtitle line on the timeline ([startMs]..[endMs], timeline time). [source]: what was said, before translation. */
+data class Subtitle(
+    val id: String = newId(),
+    val startMs: Long,
+    val endMs: Long,
+    val text: String,
+    val source: String = "",
+)
+
+/** How subtitles look. [size] is a fraction of the frame's shorter side; [y] is where the bottom of the text sits, 0..1 from the top. */
+data class SubtitleStyle(
+    val size: Float = 0.05f,
+    val y: Float = 0.9f,
+    val color: Int = 0xFFFFFFFF.toInt(),
+    /** true = dark box behind the text, false = black outline. */
+    val box: Boolean = false,
+    val bold: Boolean = true,
+)
+
 data class Project(
     val id: String = newId(),
     val name: String,
     val clips: List<Clip> = emptyList(),
     val overlays: List<Overlay> = emptyList(),
     val audios: List<AudioTrack> = emptyList(),
+    /** Sorted by start time, never overlapping. */
+    val subtitles: List<Subtitle> = emptyList(),
+    val subtitleStyle: SubtitleStyle = SubtitleStyle(),
     val aspect: AspectRatio = AspectRatio.ORIGINAL,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),

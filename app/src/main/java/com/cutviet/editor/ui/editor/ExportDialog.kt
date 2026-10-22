@@ -2,6 +2,7 @@ package com.cutviet.editor.ui.editor
 
 import android.content.Intent
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -53,7 +54,7 @@ fun ExportDialog(vm: EditorViewModel, onDismiss: () -> Unit, onStart: (ExportSet
         onDismissRequest = onDismiss,
         title = { Text("Xuất video") },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 Section("Độ phân giải")
                 Row(Modifier.horizontalScroll(rememberScrollState())) {
                     ExportResolution.entries.forEach { r ->
@@ -73,6 +74,13 @@ fun ExportDialog(vm: EditorViewModel, onDismiss: () -> Unit, onStart: (ExportSet
                 Row {
                     ExportCodec.entries.forEach { c ->
                         Option(c.label, settings.codec == c) { settings = settings.copy(codec = c) }
+                    }
+                }
+                if (vm.project.subtitles.isNotEmpty()) {
+                    Section("Phụ đề (${vm.project.subtitles.size} câu)")
+                    Row {
+                        Option("Ghi vào video", settings.burnSubtitles) { settings = settings.copy(burnSubtitles = true) }
+                        Option("Không", !settings.burnSubtitles) { settings = settings.copy(burnSubtitles = false) }
                     }
                 }
                 Spacer(Modifier.height(12.dp))

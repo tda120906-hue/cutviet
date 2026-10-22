@@ -62,6 +62,19 @@ class ProjectStore(context: Context) {
             put("clips", JSONArray().apply { p.clips.forEach { put(clipJson(it)) } })
             put("overlays", JSONArray().apply { p.overlays.forEach { put(overlayJson(it)) } })
             put("audios", JSONArray().apply { p.audios.forEach { put(audioJson(it)) } })
+            put("subtitles", JSONArray().apply {
+                p.subtitles.forEach { s ->
+                    put(JSONObject().apply {
+                        put("id", s.id); put("startMs", s.startMs); put("endMs", s.endMs); put("text", s.text); put("source", s.source)
+                    })
+                }
+            })
+            p.subtitleStyle.let { st ->
+                put("subtitleStyle", JSONObject().apply {
+                    put("size", st.size.toDouble()); put("y", st.y.toDouble()); put("color", st.color)
+                    put("box", st.box); put("bold", st.bold)
+                })
+            }
         }
 
         private fun overlayJson(o: Overlay) = JSONObject().apply {
@@ -140,8 +153,24 @@ class ProjectStore(context: Context) {
             }
             o.optJSONArray("audios")?.let { a -> for (i in 0 until a.length()) audios += audioFrom(a.getJSONObject(i)) }
             val overlays = o.optJSONArray("overlays")?.let { a -> (0 until a.length()).map { overlayFrom(a.getJSONObject(it)) } }.orEmpty()
+            val subtitles = o.optJSONArray("subtitles")?.let { a ->
+                (0 until a.length()).map { i ->
+                    val t = a.getJSONObject(i)
+                    Subtitle(
+                        id = t.optString("id", newId()), startMs = t.getLong("startMs"), endMs = t.getLong("endMs"),
+                        text = t.optString("text"), source = t.optString("source"),
+                    )
+                }
+            }.orEmpty()
+            val style = o.optJSONObject("subtitleStyle")?.let { t ->
+                SubtitleStyle(
+                    size = t.optDouble("size", 0.05).toFloat(), y = t.optDouble("y", 0.9).toFloat(),
+                    color = t.optInt("color", -1), box = t.optBoolean("box"), bold = t.optBoolean("bold", true),
+                )
+            } ?: SubtitleStyle()
             return Project(
                 id = o.getString("id"), name = o.optString("name", "Dự án"), clips = clips, overlays = overlays, audios = audios,
+                subtitles = subtitles, subtitleStyle = style,
                 aspect = runCatching { AspectRatio.valueOf(o.optString("aspect")) }.getOrDefault(AspectRatio.ORIGINAL),
                 createdAt = o.optLong("createdAt"), updatedAt = o.optLong("updatedAt"),
             )

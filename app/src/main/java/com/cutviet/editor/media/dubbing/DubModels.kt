@@ -6,6 +6,12 @@ import java.io.File
 enum class SourceLanguage(val code: String, val label: String, val initialPrompt: String?) {
     ENGLISH("en", "Tiếng Anh", null),
     CHINESE("zh", "Tiếng Trung", "以下是普通话的句子。"),
+    /** Subtitles only: the words are written down as they are said. */
+    VIETNAMESE("vi", "Tiếng Việt", "Xin chào các bạn. Hôm nay, chúng ta sẽ nói về một chủ đề rất thú vị."),
+    ;
+
+    /** Whether a dub into Vietnamese makes sense (not for Vietnamese speech). */
+    val dubbable: Boolean get() = this != VIETNAMESE
 }
 
 /** Which translation branch to use. */
