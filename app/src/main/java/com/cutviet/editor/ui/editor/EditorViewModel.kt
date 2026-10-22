@@ -19,6 +19,11 @@ import androidx.work.WorkManager
 import com.cutviet.editor.media.dubbing.DubbingPipeline
 import com.cutviet.editor.media.dubbing.DubbingWorker
 import com.cutviet.editor.media.dubbing.SourceLanguage
+import com.cutviet.editor.media.dubbing.SubtitlePipeline
+import com.cutviet.editor.media.dubbing.SubtitleWorker
+import com.cutviet.editor.model.Subtitle
+import com.cutviet.editor.model.SubtitleCues
+import com.cutviet.editor.model.SubtitleStyle
 import com.cutviet.editor.media.Exporter
 import com.cutviet.editor.media.MediaProbe
 import com.cutviet.editor.media.VoiceEngine
@@ -56,6 +61,7 @@ enum class Panel(val title: String) {
     OVERLAY_MASK("Mặt nạ lớp phủ"),
     VOICE("Giọng đọc AI"),
     CANVAS("Tỉ lệ khung hình"),
+    SUBTITLE("Phụ đề"),
     DURATION("Thời lượng ảnh"),
 }
 
@@ -166,11 +172,15 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
     fun commit(p: Project, record: Boolean = true, coalesce: Boolean = false) {
         if (p == project) return
         if (record) pushHistory(coalesce)
+        val old = project
         project = p.copy(updatedAt = System.currentTimeMillis())
         selected?.let { if (it !in project.clips.indices) selected = null }
-        preview.setProject(project)
+        // Subtitles are drawn over the preview, not by the player: editing them needs no rebuild.
+        if (withoutSubtitles(old) != withoutSubtitles(project)) preview.setProject(project)
         scheduleSave()
     }
+
+    private fun withoutSubtitles(p: Project) = p.copy(subtitles = emptyList(), subtitleStyle = SubtitleStyle(), updatedAt = 0)
 
     fun undo() {
         val prev = undoStack.removeLastOrNull() ?: return
@@ -761,6 +771,146 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
 
     fun cancelDubbing() {
         WorkManager.getInstance(getApplication<Application>()).cancelUniqueWork(DubbingWorker.UNIQUE_NAME)
+    }
+
+    // ---- subtitles ----
+
+    var showSubtitleDialog by mutableStateOf(false)
+    /** Tab the dubbing dialog opens on (1 = models and keys). */
+    var dubbingTab by mutableIntStateOf(0)
+
+    /** Progress line of the running subtitle job, or null when none runs. */
+    var subtitleStatus by mutableStateOf<String?>(null)
+        private set
+
+    /** Subtitle line being edited in the panel. */
+    var selectedSubtitleId by mutableStateOf<String?>(null)
+
+    init {
+        watchSubtitles()
+    }
+
+    /** Makes subtitles for every video clip in the background; they replace the current ones when done. */
+    fun startSubtitles(language: SourceLanguage, separate: Boolean) {
+        if (subtitleStatus != null) {
+            toast = "Đang có một lượt tạo phụ đề chạy."
+            return
+        }
+        val parts = project.clips.mapIndexedNotNull { i, c ->
+            if (c.isImage || !c.hasAudio || c.durationMs <= 0) null
+            else SubtitlePipeline.Part(c.uri, c.trimStartMs, c.trimEndMs, project.clipStartMs(i), c.durationMs, c.speed)
+        }
+        if (parts.isEmpty()) {
+            toast = "Dự án chưa có đoạn video nào có tiếng."
+            return
+        }
+        SubtitleWorker.enqueue(getApplication(), project.id, parts, language, separate)
+        subtitleStatus = "Đang chuẩn bị tạo phụ đề…"
+    }
+
+    fun cancelSubtitles() {
+        WorkManager.getInstance(getApplication<Application>()).cancelUniqueWork(SubtitleWorker.UNIQUE_NAME)
+    }
+
+    private fun watchSubtitles() {
+        val app = getApplication<Application>()
+        viewModelScope.launch {
+            WorkManager.getInstance(app).getWorkInfosForUniqueWorkFlow(SubtitleWorker.UNIQUE_NAME).collect { infos ->
+                val info = infos.lastOrNull { it.tags.contains(DubbingWorker.projectTag(project.id)) } ?: return@collect
+                if (!info.state.isFinished) {
+                    val step = info.progress.getString(SubtitleWorker.KEY_STEP)
+                        ?.let { runCatching { SubtitlePipeline.Step.valueOf(it) }.getOrNull() }
+                    val pct = (info.progress.getFloat(SubtitleWorker.KEY_PROGRESS, 0f) * 100).toInt()
+                    val note = info.progress.getString(SubtitleWorker.KEY_NOTE)?.let { " · $it" }.orEmpty()
+                    subtitleStatus = if (step != null) "Phụ đề: ${step.label}… $pct%$note" else "Đang chuẩn bị tạo phụ đề…"
+                    return@collect
+                }
+                val wasRunning = subtitleStatus != null
+                subtitleStatus = null
+                when (info.state) {
+                    WorkInfo.State.SUCCEEDED -> applySubtitleResult(app, info)
+                    WorkInfo.State.FAILED -> if (wasRunning) toast = info.outputData.getString(SubtitleWorker.KEY_ERROR) ?: "Tạo phụ đề thất bại."
+                    else -> if (wasRunning) toast = "Đã huỷ tạo phụ đề."
+                }
+            }
+        }
+    }
+
+    private suspend fun applySubtitleResult(app: Application, info: WorkInfo) {
+        val file = SubtitleWorker.resultFile(app, info.id.toString())
+        if (!file.exists()) return // already applied
+        val cues = withContext(Dispatchers.IO) {
+            runCatching { SubtitleWorker.decode(file.readText()) }.getOrNull().also { file.renameTo(File(file.parentFile, "subtitles_applied.json")) }
+        }
+        if (cues.isNullOrEmpty()) {
+            toast = "Không đọc được kết quả phụ đề."
+            return
+        }
+        commit(project.copy(subtitles = cues.map { Subtitle(startMs = it.startMs, endMs = it.endMs, text = it.text, source = it.source) }))
+        val fallback = info.outputData.getString(SubtitleWorker.KEY_FALLBACK)
+        toast = buildString {
+            append("Đã tạo ${cues.size} câu phụ đề")
+            append(if (info.outputData.getBoolean(SubtitleWorker.KEY_ONLINE, false)) " (online)." else " (offline).")
+            if (fallback != null) append(" Online lỗi nên đã chuyển offline: $fallback")
+        }
+    }
+
+    val selectedSubtitle: Subtitle? get() = selectedSubtitleId?.let { id -> project.subtitles.firstOrNull { it.id == id } }
+
+    /** Keeps lines in time order after an edit. */
+    private fun withSubtitles(list: List<Subtitle>) = project.copy(subtitles = list.sortedBy { it.startMs })
+
+    fun updateSubtitle(id: String, f: (Subtitle) -> Subtitle) {
+        commit(withSubtitles(project.subtitles.map { if (it.id == id) f(it).let { s -> s.copy(endMs = maxOf(s.endMs, s.startMs + 100)) } else it }), coalesce = true)
+    }
+
+    /** Moves one end of a line to the playhead. */
+    fun setSubtitleEdge(id: String, start: Boolean) {
+        val t = playheadMs
+        updateSubtitle(id) { if (start) it.copy(startMs = minOf(t, it.endMs - 100)) else it.copy(endMs = maxOf(t, it.startMs + 100)) }
+    }
+
+    /** Adds an empty line at the playhead, up to the next line (at most 3 s). */
+    fun addSubtitleAtPlayhead() {
+        val t = playheadMs
+        if (SubtitleCues.at(project.subtitles, t) != null) {
+            toast = "Ở đây đã có phụ đề, hãy sửa câu đó."
+            return
+        }
+        val next = project.subtitles.firstOrNull { it.startMs > t }?.startMs ?: Long.MAX_VALUE
+        val end = minOf(t + 3000, next - SubtitleCues.GAP_MS, project.durationMs).coerceAtLeast(t + 300)
+        val sub = Subtitle(startMs = t, endMs = end, text = "Phụ đề")
+        commit(withSubtitles(project.subtitles + sub))
+        selectedSubtitleId = sub.id
+    }
+
+    fun deleteSubtitle(id: String) {
+        commit(project.copy(subtitles = project.subtitles.filterNot { it.id == id }))
+        if (selectedSubtitleId == id) selectedSubtitleId = null
+    }
+
+    fun clearSubtitles() {
+        commit(project.copy(subtitles = emptyList()))
+        selectedSubtitleId = null
+    }
+
+    fun updateSubtitleStyle(f: (SubtitleStyle) -> SubtitleStyle) {
+        commit(project.copy(subtitleStyle = f(project.subtitleStyle)), coalesce = true)
+    }
+
+    /** The subtitle tool: the panel when there are subtitles, else straight to making them. */
+    fun openSubtitles() {
+        if (project.subtitles.isEmpty() && subtitleStatus == null) showSubtitleDialog = true
+        else openPanel(Panel.SUBTITLE)
+    }
+
+    /** Selects a line and shows it: the playhead moves just inside it. */
+    fun showSubtitle(sub: Subtitle) {
+        preview.pause()
+        selectedSubtitleId = sub.id
+        val t = (sub.startMs + 1).coerceAtMost(project.durationMs)
+        jumpPlayhead(t)
+        preview.seekTo(t)
     }
 
     // ---- text ----

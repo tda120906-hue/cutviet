@@ -394,4 +394,6 @@ data class ExportSettings(
     val resolution: ExportResolution = ExportResolution.ORIGINAL,
     val quality: ExportQuality = ExportQuality.ORIGINAL,
     val codec: ExportCodec = ExportCodec.H264,
+    /** Burn the subtitles into the picture. */
+    val burnSubtitles: Boolean = true,
 )

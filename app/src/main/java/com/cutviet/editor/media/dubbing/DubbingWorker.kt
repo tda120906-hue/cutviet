@@ -263,20 +263,31 @@ object Engines {
             OnlineEngine.NATURAL -> GeminiDubber(GeminiApi(s.geminiKey, simulate), s.geminiTextModel, s.geminiTtsModel, workDir, s.distinguishSpeakers)
             OnlineEngine.LIVE -> GeminiLiveTranslator(s.geminiKey, s.geminiModel, workDir, simulate)
         }
-        if (s.mode == DubMode.OFFLINE) return skip("mode Offline")
-        if (s.simulateQuota) return dubber(simulate = true)
-        if (s.geminiKey.isBlank()) return skip("no Gemini key")
-        val cm = context.getSystemService(android.net.ConnectivityManager::class.java)
-        val caps = cm?.getNetworkCapabilities(cm.activeNetwork) ?: return skip("no network")
-        if (!caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)) return skip("network has no internet")
-        val unmetered = caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+        if (s.simulateQuota && s.mode != DubMode.OFFLINE) return dubber(simulate = true)
         val offlineReady = DubModel.WHISPER_LARGE_V3.isReady(context) && DubModel.GEMMA_3N_E4B.isReady(context)
+        val why = whyNotOnline(context, offlineReady)
+        return if (why == null) dubber() else skip(why)
+    }
+
+    /**
+     * Null when the online branch should be used, else why not: mode Offline, no key, no internet,
+     * or Auto on mobile data while the offline models ([offlineReady]) can do the job.
+     */
+    fun whyNotOnline(context: Context, offlineReady: Boolean): String? {
+        val s = DubSettings(context)
+        if (s.mode == DubMode.OFFLINE) return "mode Offline"
+        if (s.simulateQuota) return null
+        if (s.geminiKey.isBlank()) return "no Gemini key"
+        val cm = context.getSystemService(android.net.ConnectivityManager::class.java)
+        val caps = cm?.getNetworkCapabilities(cm.activeNetwork) ?: return "no network"
+        if (!caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)) return "network has no internet"
+        val unmetered = caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
         val use = when (s.mode) {
             DubMode.ONLINE_FIRST -> true
             DubMode.AUTO -> unmetered || !offlineReady
             DubMode.OFFLINE -> false
         }
-        return if (use) dubber() else skip("Auto on mobile data with offline models ready")
+        return if (use) null else "Auto on mobile data with offline models ready"
     }
 
     /** Null when the separation model is not downloaded: the dub then only turns the whole clip down. */

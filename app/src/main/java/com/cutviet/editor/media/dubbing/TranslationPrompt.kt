@@ -43,6 +43,20 @@ object TranslationPrompt {
         }
     }
 
+    /** Translation for subtitles: natural and short enough to read, no syllable limits. */
+    fun buildSubtitles(language: SourceLanguage, context: List<SpeechSegment>, lines: List<SpeechSegment>): String = buildString {
+        append("Dịch các câu thoại sau từ ${language.label.lowercase()} sang tiếng Việt để làm phụ đề phim. ")
+        append("Dịch tự nhiên như người Việt nói, đúng sắc thái và cách xưng hô theo ngữ cảnh, gọn để người xem đọc kịp, ")
+        append("giữ nguyên tên riêng, không dịch từng chữ. ")
+        append("Trả về đúng ${lines.size} dòng, mỗi dòng dạng \"số. bản dịch\", không giải thích gì thêm.\n")
+        if (context.isNotEmpty()) {
+            append("\nNgữ cảnh (các câu ngay trước, không cần dịch):\n")
+            context.forEach { append("- ").append(it.text.trim()).append('\n') }
+        }
+        append("\nCâu cần dịch:\n")
+        lines.forEachIndexed { i, s -> append(i + 1).append(". ").append(s.text.trim()).append('\n') }
+    }
+
     /** Asks for a shorter version of one dubbed line that ran past the time it has. */
     fun shorten(language: SourceLanguage, source: String, current: String, maxSyllables: Int): String = buildString {
         append("Câu lồng tiếng tiếng Việt dưới đây quá dài so với thời gian nói. ")

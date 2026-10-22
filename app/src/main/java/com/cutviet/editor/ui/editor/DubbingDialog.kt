@@ -79,10 +79,10 @@ import java.io.File
 
 /** "Dịch lồng tiếng": start a dub of the selected clip, and manage models and keys. */
 @Composable
-fun DubbingDialog(vm: EditorViewModel, onDismiss: () -> Unit) {
+fun DubbingDialog(vm: EditorViewModel, onDismiss: () -> Unit, initialTab: Int = 0) {
     val context = LocalContext.current
     val settings = remember { DubSettings(context) }
-    var tab by remember { mutableIntStateOf(0) }
+    var tab by remember { mutableIntStateOf(initialTab) }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(Modifier.fillMaxSize().background(Color(0xFF101014))) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -127,7 +127,7 @@ private fun DubTab(vm: EditorViewModel, settings: DubSettings, onOpenModels: () 
     )
 
     Label("Ngôn ngữ trong video")
-    Chips(SourceLanguage.entries, language, { it.label }) { language = it }
+    Chips(SourceLanguage.entries.filter { it.dubbable }, language, { it.label }) { language = it }
 
     Label("Cách dịch")
     Chips(DubMode.entries, mode, { it.label }) { mode = it; settings.mode = it }
@@ -370,12 +370,12 @@ private fun importModel(context: Context, uri: Uri, m: DubModel, progress: (Floa
 }.getOrDefault(false)
 
 @Composable
-private fun Label(text: String) {
+internal fun Label(text: String) {
     Text(text, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 16.dp, bottom = 6.dp))
 }
 
 @Composable
-private fun <T> Chips(items: List<T>, selected: T?, label: (T) -> String, onPick: (T) -> Unit) {
+internal fun <T> Chips(items: List<T>, selected: T?, label: (T) -> String, onPick: (T) -> Unit) {
     Row(Modifier.fillMaxWidth().padding(bottom = 2.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         items.take(4).forEach { item ->
             FilterChip(
