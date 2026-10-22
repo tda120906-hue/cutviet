@@ -1,7 +1,6 @@
 package com.cutviet.editor.media.dubbing
 
 import com.cutviet.editor.media.VoiceEngine
-import okio.ByteString.Companion.toByteString
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -9,10 +8,11 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
- * Natural online dub with Gemini 3.8. First the text model listens to every speech segment of the
- * separated voice in one request: who says it (the same person keeps the same id), whether that
- * person is a man, a woman or a child, how they sound, the tone of each line, and a Vietnamese
- * translation that fits the line's time. Then the TTS model reads each line on its own (so no line
+ * Natural online dub with Gemini 3.8. First the text model listens exactly as for the AI subtitles
+ * ([GeminiSubtitler]): each segment of the separated voice is cut into turns of one person each
+ * (the same person keeps the same id), with whether that person is a man, a woman or a child, how
+ * they sound, the tone of each turn, and a natural subtitle-style Vietnamese translation; turns
+ * that come out too long are reworded shorter later. Then the TTS model reads each turn on its own (so no line
  * can end up with another line's audio), every line of a person in the same voice and description,
  * with the line's tone as an inline tag. People are voiced one after another; when the daily quota
  * runs out, the person cut short and everyone after come back without files, and the pipeline
@@ -33,8 +33,6 @@ class GeminiDubber(
     /** One segment as the model heard it ([index] into the speech ranges). */
     data class Heard(val index: Int, val speaker: String, val source: String, val text: String, val emotion: String)
 
-    class Listening(val speakers: List<Speaker>, val lines: List<Heard>)
-
     /** The dubbing voice of one person; [label] ("Nam 1") is null when everyone shares one voice. */
     data class Role(val label: String?, val voice: String, val gender: Gender, val description: String)
 
@@ -45,15 +43,17 @@ class GeminiDubber(
 
     override suspend fun dub(
         voice: FloatArray,
-        ranges: List<SpeechDetector.Range>,
+        segments: List<SpeechDetector.Range>,
         language: SourceLanguage,
         progress: (Float) -> Unit,
     ): List<OnlineLine> {
         try {
+            // The same listening as the AI subtitles: who says what, turn by turn, translated as a
+            // subtitle (natural, not squeezed to a syllable count). Each turn is one dubbed line.
+            val heard = GeminiSubtitler(api, textModel).listen(voice, segments, language) { progress(0.3f * it) }
+            val ranges = heard.turns.map { SpeechDetector.Range(it.startMs, it.endMs) }
+            val lines = heard.turns.mapIndexed { i, t -> Heard(i, t.speaker, t.source, t.vi, t.emotion) }.filter { it.text.isNotBlank() }
             val room = DubbingPipeline.roomFor(ranges.map { it.startMs to (it.endMs - it.startMs) }, voice.size / 16L)
-            val budgets = room.map { TranslationPrompt.syllableBudget(it, SYLLABLES_PER_SECOND) }
-            val heard = listen(voice, ranges, budgets, language) { progress(0.3f * it) }
-            val lines = heard.lines.filter { it.text.isNotBlank() }
             if (lines.isEmpty()) throw OnlineUnavailableException("Gemini không nghe ra câu nào để dịch")
 
             // A person the model gave no gender gets one from the pitch of their voice.
@@ -128,34 +128,6 @@ class GeminiDubber(
         } finally {
             api.shutdown()
         }
-    }
-
-    /** Asks the text model about the segments, in batches of a few minutes of speech. */
-    private suspend fun listen(
-        voice: FloatArray,
-        ranges: List<SpeechDetector.Range>,
-        budgets: List<Int>,
-        language: SourceLanguage,
-        progress: (Float) -> Unit,
-    ): Listening {
-        val speakers = LinkedHashMap<String, Speaker>()
-        val lines = HashMap<Int, Heard>()
-        val batches = batches(ranges)
-        batches.forEachIndexed { b, indices ->
-            val what = "nghe ${b + 1}/${batches.size}"
-            val known = speakers.values.toList()
-            val text = askJson(what) { schema -> listenRequest(textModel, language, voice, ranges, indices, budgets, known, schema) }
-            val parsed = parseListening(text, indices.toSet())
-                ?: throw OnlineUnavailableException("Không đọc được câu trả lời của Gemini ($what)")
-            parsed.speakers.forEach { s -> if (s.id !in speakers || speakers[s.id]?.gender == null) speakers[s.id] = s }
-            parsed.lines.forEach { lines[it.index] = it }
-            if (parsed.lines.size < indices.size) DubLog.w(TAG, "$what: answered ${parsed.lines.size} of ${indices.size} segments")
-            progress((b + 1f) / batches.size)
-        }
-        // Ids used in lines but never described.
-        lines.values.map { it.speaker }.distinct().filter { it !in speakers }.forEach { speakers[it] = Speaker(it, null, "") }
-        DubLog.i(TAG, "listened: ${speakers.size} speakers, ${lines.size} of ${ranges.size} segments")
-        return Listening(speakers.values.toList(), lines.values.sortedBy { it.index })
     }
 
     /** Sends a request built with a JSON schema; if the server refuses the schema, asks again without one. */
@@ -238,9 +210,8 @@ class GeminiDubber(
         /** Speech per listening request; 16 kHz WAV, so well under the 20 MB request limit. */
         private const val BATCH_SPEECH_MS = 180_000L
         private const val BATCH_SEGMENTS = 40
-        private const val MAX_REWORDS = 8
-        /** Audio kept around each segment sent for listening. */
-        private const val PAD_MS = 150L
+        /** Translations are not squeezed to fit while listening, so more lines may need a shorter wording. */
+        private const val MAX_REWORDS = 30
 
         /**
          * Prebuilt Gemini voices by gender (Google's voice list), most neutral first. Children get
@@ -368,86 +339,6 @@ class GeminiDubber(
          */
         fun voicingOrder(lines: List<Heard>, roleOf: (Heard) -> Role): List<List<Heard>> =
             lines.groupBy(roleOf).values.sortedWith(compareByDescending<List<Heard>> { it.size }.thenBy { it.first().index })
-
-        fun listenRequest(
-            model: String,
-            language: SourceLanguage,
-            voice: FloatArray,
-            ranges: List<SpeechDetector.Range>,
-            indices: List<Int>,
-            budgets: List<Int>,
-            known: List<Speaker>,
-            schema: Boolean,
-        ): JSONObject {
-            val input = JSONArray().put(text(listenPrompt(language, indices.size, known)))
-            for (i in indices) {
-                input.put(text("[S${i + 1}] (tối đa ${budgets[i]} âm tiết)"))
-                val r = ranges[i]
-                val from = ((r.startMs - PAD_MS) * 16).toInt().coerceIn(0, voice.size)
-                val to = ((r.endMs + PAD_MS) * 16).toInt().coerceIn(from, voice.size)
-                input.put(JSONObject().put("type", "audio").put("data", wavBytes(voice, from, to, 16_000).toByteString().base64()).put("mime_type", "audio/wav"))
-            }
-            return JSONObject().put("model", model).put("input", input).apply {
-                if (schema) put("response_format", jsonFormat(LISTEN_SCHEMA))
-            }
-        }
-
-        private fun listenPrompt(language: SourceLanguage, count: Int, known: List<Speaker>): String = buildString {
-            append("Bạn là đạo diễn lồng tiếng phim. Dưới đây là $count đoạn ghi âm lời nói ${language.label.lowercase()} trong một video, đúng thứ tự thời gian. ")
-            append("Mỗi đoạn có nhãn [S<số>] và số âm tiết tối đa của câu tiếng Việt.\n")
-            append("Với mỗi đoạn:\n")
-            append("1. Nhận ra ai đang nói. Cùng một người ở nhiều đoạn thì dùng cùng một mã (A, B, C…). Phân biệt bằng giọng nghe được, không đoán theo nội dung.\n")
-            append("2. Ghi nguyên văn câu gốc (source).\n")
-            append("3. Dịch sang tiếng Việt tự nhiên như người Việt nói ngoài đời (vi): đúng sắc thái, xưng hô hợp với người nói và người nghe (anh, chị, em, tôi, mình…), không dịch từng chữ, không dài hơn số âm tiết cho phép.\n")
-            append("4. Ghi giọng điệu của câu bằng vài từ tiếng Anh (emotion), ví dụ neutral, excited, laughing, annoyed, sad, whispering, shouting.\n")
-            append("Với mỗi người nói: giới tính theo giọng (gender: male, female, hoặc child nếu là trẻ em) và mô tả giọng bằng một câu tiếng Anh ngắn (voice): tuổi ước chừng, giọng trầm hay cao, nói nhanh hay chậm, phong thái.\n")
-            if (known.isNotEmpty()) {
-                append("Những người đã nhận ra ở phần trước của video (dùng lại mã nếu đúng là họ):\n")
-                known.forEach { append("- ${it.id}: ${it.gender?.name?.lowercase() ?: "?"}, ${it.description}\n") }
-            }
-            append("Đoạn không có lời nói rõ thì vẫn trả về, với vi rỗng.\n")
-            append("Chỉ trả về JSON dạng {\"speakers\":[{\"id\":\"A\",\"gender\":\"male\",\"voice\":\"…\"}],\"lines\":[{\"index\":1,\"speaker\":\"A\",\"source\":\"…\",\"vi\":\"…\",\"emotion\":\"neutral\"}]}, trong đó index là số trong nhãn [S<số>].")
-        }
-
-        private val LISTEN_SCHEMA: JSONObject
-            get() = JSONObject("""
-                {"type":"object","properties":{
-                  "speakers":{"type":"array","items":{"type":"object","properties":{
-                    "id":{"type":"string"},
-                    "gender":{"type":"string","enum":["male","female","child"]},
-                    "voice":{"type":"string"}},"required":["id","gender","voice"]}},
-                  "lines":{"type":"array","items":{"type":"object","properties":{
-                    "index":{"type":"integer"},
-                    "speaker":{"type":"string"},
-                    "source":{"type":"string"},
-                    "vi":{"type":"string"},
-                    "emotion":{"type":"string"}},"required":["index","speaker","source","vi","emotion"]}}},
-                 "required":["speakers","lines"]}
-            """.trimIndent())
-
-        /** Reads the listening answer; segments are numbered from 1 in the prompt. */
-        fun parseListening(answer: String, expected: Set<Int>): Listening? {
-            val json = jsonIn(answer) ?: return null
-            val speakers = ArrayList<Speaker>()
-            json.optJSONArray("speakers")?.let { arr ->
-                for (i in 0 until arr.length()) {
-                    val o = arr.optJSONObject(i) ?: continue
-                    val id = o.optString("id").trim()
-                    if (id.isEmpty()) continue
-                    speakers += Speaker(id, genderOf(o.optString("gender")), o.optString("voice").trim())
-                }
-            }
-            val lines = ArrayList<Heard>()
-            val arr = json.optJSONArray("lines") ?: return null
-            for (i in 0 until arr.length()) {
-                val o = arr.optJSONObject(i) ?: continue
-                val index = o.optInt("index", -1) - 1
-                if (index !in expected || lines.any { it.index == index }) continue
-                val speaker = o.optString("speaker").trim().ifEmpty { "?" }
-                lines += Heard(index, speaker, o.optString("source").trim(), o.optString("vi").trim(), normaliseEmotion(o.optString("emotion")))
-            }
-            return Listening(speakers, lines.sortedBy { it.index })
-        }
 
         fun genderOf(s: String): Gender? = when (s.trim().lowercase()) {
             "male", "man", "m", "nam" -> Gender.MALE
