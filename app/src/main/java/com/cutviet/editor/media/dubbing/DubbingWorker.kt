@@ -315,6 +315,7 @@ object Engines {
                     throw StepUnavailableException("Chưa tải model dịch (${model.label})")
             }
         }
-        return GemmaTranslator(context, model.file(context))
+        // Translated like the AI subtitles (natural, in context); lines too long for their time are reworded shorter.
+        return GemmaTranslator(context, model.file(context), subtitles = true)
     }
 }

@@ -129,10 +129,10 @@ class SubtitlePipeline(private val context: Context, private val workDir: File) 
             val ranges = SpeechDetector.detect(voice, AudioPcmDecoder.SAMPLE_RATE)
             DubLog.i(TAG, "clip $i: ${ranges.size} speech segments")
             if (ranges.isEmpty()) return@forEachIndexed
-            val lines = timed("gemini $i") { online.subtitle(voice, ranges, language) { at(0.1f + 0.9f * it) } }
-            lines.filter { it.vi.isNotBlank() && !SubtitleCues.isHallucination(it.vi) }.forEach { l ->
-                val r = ranges[l.index]
-                out += Said(i, r.startMs + src.offsetMs, r.endMs + src.offsetMs, l.source, l.vi)
+            // Each person's turn is its own line, also when two people speak without a pause.
+            val heard = timed("gemini $i") { online.listen(voice, ranges, language) { at(0.1f + 0.9f * it) } }
+            heard.turns.filter { !SubtitleCues.isHallucination(it.vi) }.forEach { t ->
+                out += Said(i, t.startMs + src.offsetMs, t.endMs + src.offsetMs, t.source, t.vi)
             }
         }
         if (out.isEmpty()) throw OnlineUnavailableException("Gemini không nghe ra câu nào")

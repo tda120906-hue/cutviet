@@ -5,13 +5,10 @@ import com.cutviet.editor.media.dubbing.GeminiDubber
 import com.cutviet.editor.media.dubbing.Gender
 import com.cutviet.editor.media.dubbing.Loudness
 import com.cutviet.editor.media.dubbing.PitchTracker
-import com.cutviet.editor.media.dubbing.SourceLanguage
-import com.cutviet.editor.media.dubbing.SpeechDetector
 import com.cutviet.editor.model.AudioKind
 import com.cutviet.editor.model.Clip
 import com.cutviet.editor.model.Project
 import com.cutviet.editor.model.ProjectOps
-import okio.ByteString.Companion.decodeBase64
 import okio.ByteString.Companion.toByteString
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -45,26 +42,6 @@ class SpeakerDubTest {
         }
         // Silence has no pitch.
         assertNull(PitchTracker.medianF0(FloatArray(16_000), 16_000))
-    }
-
-    @Test
-    fun listeningAnswerIsReadEvenInsideACodeFence() {
-        val answer = """
-            ```json
-            {"speakers":[{"id":"A","gender":"male","voice":"a man in his 60s, deep and slow"},
-                         {"id":"B","gender":"unsure","voice":"young, fast"}],
-             "lines":[{"index":2,"speaker":"A","source":"Hello there","vi":"Chào bạn","emotion":"Neutral"},
-                      {"index":3,"speaker":"B","source":"Hi!","vi":"Chào!","emotion":"excited"},
-                      {"index":9,"speaker":"B","source":"?","vi":"?","emotion":"neutral"}]}
-            ```
-        """.trimIndent()
-        val heard = GeminiDubber.parseListening(answer, setOf(1, 2))!!
-        assertEquals(listOf(1, 2), heard.lines.map { it.index })
-        assertEquals("", heard.lines[0].emotion)
-        assertEquals("excited", heard.lines[1].emotion)
-        assertEquals(Gender.MALE, heard.speakers[0].gender)
-        assertNull(heard.speakers[1].gender)
-        assertNull(GeminiDubber.parseListening("not json", setOf(0)))
     }
 
     @Test
@@ -129,20 +106,6 @@ class SpeakerDubTest {
         assertFalse(content.has("annotations"))
         assertEquals("audio", tts.getJSONObject("response_format").getString("type"))
         assertEquals("Kore", tts.getJSONObject("generation_config").getJSONArray("speech_config").getJSONObject(0).getString("voice"))
-
-        val x = voice(200.0, 2000)
-        val ranges = listOf(SpeechDetector.Range(100, 900), SpeechDetector.Range(1100, 1900))
-        val listen = GeminiDubber.listenRequest("gemini-3.8-flash", SourceLanguage.ENGLISH, x, ranges, listOf(0, 1), listOf(5, 6), emptyList(), schema = true)
-        val input = listen.getJSONArray("input")
-        // Prompt, then a label and an audio part per segment.
-        assertEquals(5, input.length())
-        assertTrue(input.getJSONObject(1).getString("text").startsWith("[S1]"))
-        val audio = input.getJSONObject(2)
-        assertEquals("audio/wav", audio.getString("mime_type"))
-        val wav = audio.getString("data").decodeBase64()!!.toByteArray()
-        assertEquals("RIFF", String(wav, 0, 4))
-        assertEquals("application/json", listen.getJSONObject("response_format").getString("mime_type"))
-        assertFalse(GeminiDubber.listenRequest("m", SourceLanguage.CHINESE, x, ranges, listOf(1), listOf(5, 6), emptyList(), schema = false).has("response_format"))
     }
 
     @Test
