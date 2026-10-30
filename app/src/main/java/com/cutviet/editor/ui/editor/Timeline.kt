@@ -92,6 +92,8 @@ import kotlin.math.roundToInt
 
 private val ClipHeight = 56.dp
 private val ThumbWidth = 40.dp
+/** Widest the tracks may be drawn, well below Compose's 262 142 px layout limit (the two half-screen margins come on top). */
+private const val MAX_TIMELINE_PX = 230_000f
 
 /**
  * CapCut-style timeline: the playhead stays in the middle and the tracks scroll under it.
@@ -107,9 +109,12 @@ fun Timeline(
 ) {
     val density = LocalDensity.current
     var pxPerSecond by remember { mutableFloatStateOf(with(density) { 48.dp.toPx() }) }
-    val pxPerMs = pxPerSecond / 1000f
     val scroll = rememberScrollState()
     val project = vm.project
+    // A long video (an hour at the normal zoom is ~600 000 px) is drawn more zoomed out, since
+    // Compose cannot lay out anything wider than 262 142 px and the editor would crash.
+    val widest = MAX_TIMELINE_PX * 1000f / project.durationMs.coerceAtLeast(1)
+    val pxPerMs = minOf(pxPerSecond, widest) / 1000f
     val playing = vm.preview.isPlaying.value
     // Dragged edges snap when they come this close to another edge.
     val snapMs = (with(density) { 12.dp.toPx() } / pxPerMs).toLong()
@@ -276,10 +281,10 @@ fun Timeline(
                 "Bám", color = if (vm.snapEnabled) Accent else Color(0xFF77777F), fontSize = 11.sp, fontWeight = FontWeight.Bold,
                 modifier = Modifier.clickable { vm.snapEnabled = !vm.snapEnabled }.padding(horizontal = 6.dp, vertical = 6.dp),
             )
-            IconButton(onClick = { pxPerSecond = (pxPerSecond * 1.5f).coerceAtMost(with(density) { 600.dp.toPx() }) }, modifier = Modifier.size(36.dp)) {
+            IconButton(onClick = { pxPerSecond = (minOf(pxPerSecond, widest) * 1.5f).coerceAtMost(with(density) { 600.dp.toPx() }) }, modifier = Modifier.size(36.dp)) {
                 Icon(Icons.Filled.ZoomIn, "Phóng to", tint = Color.White, modifier = Modifier.size(20.dp))
             }
-            IconButton(onClick = { pxPerSecond = (pxPerSecond / 1.5f).coerceAtLeast(with(density) { 2.dp.toPx() }) }, modifier = Modifier.size(36.dp)) {
+            IconButton(onClick = { pxPerSecond = (minOf(pxPerSecond, widest) / 1.5f).coerceAtLeast(with(density) { 2.dp.toPx() }) }, modifier = Modifier.size(36.dp)) {
                 Icon(Icons.Filled.ZoomOut, "Thu nhỏ", tint = Color.White, modifier = Modifier.size(20.dp))
             }
         }
@@ -311,7 +316,8 @@ private fun OverlayTrack(vm: EditorViewModel, ov: Overlay, half: Dp, totalWidth:
     val current by rememberUpdatedState(ov)
     var dragY by remember { mutableFloatStateOf(0f) }
     val selected = vm.selectedOverlayId == ov.id
-    val width = with(density) { (ov.durationMs * pxPerMs).toDp() }.coerceAtLeast(24.dp)
+    // An overlay longer than the video is drawn no wider than the video (Compose's layout limit).
+    val width = with(density) { (ov.durationMs * pxPerMs).toDp() }.coerceAtMost(totalWidth).coerceAtLeast(24.dp)
     Row(Modifier.padding(vertical = 2.dp)) {
         Spacer(Modifier.width(half))
         Box(Modifier.width(totalWidth).height(OverlayTrackHeight).background(Color(0xFF15151A))) {
@@ -402,7 +408,7 @@ private fun OverlayTrack(vm: EditorViewModel, ov: Overlay, half: Dp, totalWidth:
 private fun FilmStrip(uri: String, isImage: Boolean, durationMs: Long, width: Dp, sourceTimeAt: (Long) -> Long) {
     val context = LocalContext.current
     val density = LocalDensity.current
-    val thumbCount = ceil(width / ThumbWidth).toInt().coerceIn(1, 24)
+    val thumbCount = ceil(width / ThumbWidth).toInt().coerceIn(1, 60)
     val thumbPx = with(density) { 96.dp.roundToPx() }
     Row(Modifier.fillMaxSize()) {
         for (i in 0 until thumbCount) {
