@@ -225,6 +225,51 @@ object ProjectOps {
             },
         )
 
+    /**
+     * Cuts DUB line [id] in two at [atMs] on the timeline: each half keeps its part of the audio,
+     * the matching part of the video's time and about its share of the text (cut at a word, a
+     * comma or a sentence end), so each can then be dubbed again on its own. Null when [atMs] is
+     * not well inside the line.
+     */
+    fun splitDubLine(p: Project, id: String, atMs: Long): Project? {
+        val a = p.audios.firstOrNull { it.id == id && it.kind == AudioKind.DUB } ?: return null
+        val end = a.startMs + a.durationMs
+        if (atMs < a.startMs + MIN_DUB_PIECE_MS || atMs > end - MIN_DUB_PIECE_MS) return null
+        val f = (atMs - a.startMs).toDouble() / a.durationMs
+        val audioCut = a.sourceStartMs + ((atMs - a.startMs) * a.speed).toLong()
+        val info = dubOrigin(p, a)
+        val (text1, text2) = splitText(info?.text ?: a.name.substringAfter(": "), f)
+        val (source1, source2) = splitText(info?.sourceText.orEmpty(), f)
+        val sourceCut = info?.let { it.sourceStartMs + ((it.sourceEndMs - it.sourceStartMs) * f).toLong() }
+        fun named(d: DubInfo?, text: String) = (d?.speaker?.let { "$it: " }.orEmpty() + text.trim()).take(40)
+        val d1 = info?.copy(sourceEndMs = sourceCut!!, text = text1, sourceText = source1)
+        val d2 = info?.copy(sourceStartMs = sourceCut!!, text = text2, sourceText = source2)
+        val first = a.copy(sourceEndMs = audioCut, dub = d1, name = named(d1 ?: info, text1))
+        val second = a.copy(id = newId(), sourceStartMs = audioCut, startMs = atMs, dub = d2, name = named(d2 ?: info, text2))
+        val i = p.audios.indexOf(a)
+        return p.copy(audios = p.audios.toMutableList().also { it[i] = first; it.add(i + 1, second) })
+    }
+
+    /** [text] cut in two at about [fraction] of its length, at the best word boundary nearby. */
+    fun splitText(text: String, fraction: Double): Pair<String, String> {
+        val t = text.trim()
+        val spaces = t.indices.filter { t[it] == ' ' }
+        if (spaces.isEmpty()) return t to t
+        val ideal = t.length * fraction
+        val cut = spaces.minByOrNull { i ->
+            val bonus = when (t[i - 1]) {
+                '.', '?', '!', '…' -> 10
+                ',', ';', ':' -> 5
+                else -> 0
+            }
+            abs(i - ideal) - bonus
+        }!!
+        return t.substring(0, cut).trim() to t.substring(cut + 1).trim()
+    }
+
+    /** Shortest half a dubbed line may be cut into. */
+    const val MIN_DUB_PIECE_MS = 300L
+
     fun restackOverlay(p: Project, id: String, delta: Int): Project {
         val i = p.overlays.indexOfFirst { it.id == id }
         if (i < 0) return p

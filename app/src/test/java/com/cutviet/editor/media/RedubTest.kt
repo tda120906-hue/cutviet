@@ -92,3 +92,40 @@ class RedubTest {
         assertEquals(p.audios[1], out.audios[1])
     }
 }
+
+class DubSplitTest {
+    private val a = Clip(uri = "content://a", mime = "video/mp4", isImage = false, sourceDurationMs = 20_000, width = 1920, height = 1080)
+
+    @Test
+    fun splitsALineInTwoAtThePlayhead() {
+        val info = DubInfo("content://a", 2000, 6000, "Hello there. How are you?", "Chào bạn. Bạn có khoẻ không?", speaker = "Nam 1", geminiVoice = "Charon")
+        val t = AudioTrack(kind = AudioKind.DUB, uri = "file:///d.wav", name = "Nam 1: Chào bạn. Bạn có khoẻ không?", sourceDurationMs = 4000, startMs = 2000, dub = info)
+        val p = Project(name = "p", clips = listOf(a), audios = listOf(t))
+        assertNull(ProjectOps.splitDubLine(p, t.id, 2100))
+        assertNull(ProjectOps.splitDubLine(p, t.id, 5900))
+        val out = ProjectOps.splitDubLine(p, t.id, 3500)!!
+        val (x, y) = out.audios
+        assertEquals(t.id, x.id)
+        assertEquals(2000L, x.startMs)
+        assertEquals(1500L, x.sourceEndMs)
+        assertEquals(3500L, y.startMs)
+        assertEquals(1500L, y.sourceStartMs)
+        assertEquals(4000L, y.sourceEndMs)
+        assertEquals(4000L, x.durationMs + y.durationMs)
+        // The text is cut at the sentence end, the video's time in the same place as the audio.
+        assertEquals("Chào bạn.", x.dub!!.text)
+        assertEquals("Bạn có khoẻ không?", y.dub!!.text)
+        assertEquals("Hello there.", x.dub!!.sourceText)
+        assertEquals(3500L, x.dub!!.sourceEndMs)
+        assertEquals(3500L, y.dub!!.sourceStartMs)
+        assertEquals("Charon", y.dub!!.geminiVoice)
+        assertEquals("Nam 1: Bạn có khoẻ không?", y.name)
+    }
+
+    @Test
+    fun splitTextPrefersSentenceEnds() {
+        assertEquals("một hai ba," to "bốn năm sáu", ProjectOps.splitText("một hai ba, bốn năm sáu", 0.4))
+        assertEquals("xin" to "chào", ProjectOps.splitText("xin chào", 0.9))
+        assertEquals("" to "", ProjectOps.splitText("", 0.5))
+    }
+}

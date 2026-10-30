@@ -66,6 +66,16 @@ object TranslationPrompt {
         append("Bản dịch hiện tại: ").append(current.trim()).append('\n')
     }
 
+    /** Asks for a dub line with its English words written the way a Vietnamese voice should say them. */
+    fun speakable(text: String): String = buildString {
+        append("Câu tiếng Việt dưới đây sẽ được giọng đọc tiếng Việt đọc to, nhưng giọng đó không đọc được chữ tiếng Anh. ")
+        append("Hãy viết lại câu, giữ nguyên mọi chữ tiếng Việt, chỉ thay các từ tiếng Anh (tên riêng, thương hiệu, từ mượn, chữ viết tắt) ")
+        append("bằng cách đọc của người Việt, viết bằng chữ tiếng Việt có dấu, các âm cách nhau bằng dấu cách. ")
+        append("Ví dụ: Facebook → phây búc, OK → ô kê, email → i meo, CEO → xi i ô, Taylor Swift → tay lơ xuýt. ")
+        append("Chỉ trả về câu đã viết lại, không giải thích.\n")
+        append("Câu: ").append(text.trim()).append('\n')
+    }
+
     private val NUMBERED = Regex("""^\s*(\d+)\s*[.):：、]\s*(.*)$""")
 
     /**

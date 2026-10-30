@@ -180,14 +180,14 @@ class DubbingPipeline(
         if (text.isEmpty()) return null
         // One sentence is far below the engine's input limit; cut defensively anyway.
         var line = text.take(voice.maxInputLength)
-        var best = render(index, 0, line, seg.slotMs, roomMs, s) ?: return null
+        var best = render(index, 0, reading(index, line), seg.slotMs, roomMs, s) ?: return null
         val limit = AudioFitter.upper(seg.slotMs, roomMs)
         if (reword && best.fit.durationMs > limit) {
             val syllables = VoiceEngine.syllableCount(line)
             val target = (syllables * limit.toDouble() / best.fit.durationMs * 0.9).toInt().coerceAtLeast(1)
             val shorter = translator.shorten(seg.text, line, s.language, target)?.take(voice.maxInputLength)
             if (shorter != null && VoiceEngine.syllableCount(shorter) < syllables) {
-                val again = render(index, 1, shorter, seg.slotMs, roomMs, s)
+                val again = render(index, 1, reading(index, shorter), seg.slotMs, roomMs, s)
                 DubLog.i(TAG, "segment $index reworded $syllables→${VoiceEngine.syllableCount(shorter)} syllables: ${again?.fit?.durationMs} ms")
                 if (again != null && AudioFitter.miss(again.fit.durationMs, seg.slotMs, roomMs) < AudioFitter.miss(best.fit.durationMs, seg.slotMs, roomMs)) {
                     best.file.delete()
@@ -202,6 +202,13 @@ class DubbingPipeline(
         DubLog.i(TAG, "segment $index rate=${fit.rate} measured=${fit.durationMs}ms slot=${seg.slotMs}ms room=${roomMs}ms attempts=${fit.attempts}")
         if (!fit.withinTolerance) DubLog.w(TAG, "segment $index misses its time by ${AudioFitter.miss(fit.durationMs, seg.slotMs, roomMs)} ms at rate ${fit.rate}")
         return DubbedSegment(seg.startMs, seg.slotMs, seg.text, line, best.file, fit.durationMs, fit.rate)
+    }
+
+    /** What the phone's voice reads for [line]: its English words respelled the Vietnamese way ([SpeakableText]). */
+    private suspend fun reading(index: Int, line: String): String {
+        val out = SpeakableText.forPhone(line) { translator.speakable(it) }
+        if (out != line) DubLog.i(TAG, "segment $index read as \"${out.take(80)}\"")
+        return out
     }
 
     private class Rendered(val file: File, val fit: AudioFitter.Fit)

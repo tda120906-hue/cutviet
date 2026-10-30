@@ -294,6 +294,7 @@ class GeminiDubber(
         fun ttsPrompt(role: Role, emotion: String, line: String): String = buildString {
             append("Read the transcript aloud in Vietnamese, exactly as written.\n")
             append("Voice: ").append(persona(role)).append(". Speaks Vietnamese like a native speaker in a real conversation: natural, lively, at a brisk pace.\n")
+            append("English words, names and abbreviations in the line are said in natural English by the same voice, flowing with the Vietnamese around them: no pause, no change of voice or tone.\n")
             append("#### TRANSCRIPT\n")
             audioTag(emotion)?.let { append(it).append(' ') }
             append(line)
