@@ -182,7 +182,8 @@ class LineDubber(private val context: Context, private val workDir: File, privat
 
     /** The phone's voice, fitted to the line's time like a full dub. */
     private suspend fun phoneVoice(text: String, slotMs: Long, roomMs: Long, pitch: Float, name: String?): Spoken? {
-        val line = text.take(voice.maxInputLength)
+        // English words respelled for the Vietnamese voice; the track keeps the text as written.
+        val line = SpeakableText.forPhone(text).take(voice.maxInputLength)
         val files = HashMap<Float, File>()
         val fit = AudioFitter.fit(voice.estimateMs(line, name, 1f), slotMs, roomMs) { rate ->
             val f = File(workDir, "line_phone_${(rate * 1000).toInt()}.wav")

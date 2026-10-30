@@ -20,18 +20,20 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
 /**
- * Background job that dubs one line again ([LineDubber]) and writes the new line to [resultFile];
- * the editor puts it in place of the old DUB track (named by the "track:" tag) when it succeeds.
+ * Background job that dubs lines again ([LineDubber]), one after another (one line, or every line
+ * of a person whose voice changes), and writes the new lines to [resultFile]; the editor puts each
+ * in place of its old DUB track when the job succeeds. A line that fails is left as it was.
  */
 class LineDubWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
         DubLog.init(applicationContext)
-        val request = runCatching { decodeRequest(inputData.getString(KEY_REQUEST)!!) }.getOrNull()
+        val batch = runCatching { decodeBatch(File(inputData.getString(KEY_BATCH)!!).readText()) }.getOrNull()
             ?: return Result.failure(error("Thiếu thông tin câu cần lồng lại"))
         if (runAttemptCount > 0) {
             DubLog.w(DubbingPipeline.TAG, "line job $id was interrupted last time, not restarting")
@@ -42,25 +44,44 @@ class LineDubWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         val voice = withContext(Dispatchers.Main) { VoiceEngine(applicationContext) }
         try {
             withTimeoutOrNull(15_000) { while (voice.status.value == VoiceEngine.Status.LOADING) delay(100) }
+            val done = JSONArray()
+            var online = false
+            var note: String? = null
+            var lastError: String? = null
             var lastStep: LineDubber.Step? = null
             var lastPercent = -1
-            val out = LineDubber(applicationContext, File(dir, "work"), voice).run(request) { step, p ->
-                val percent = (p * 100).toInt()
-                if (step != lastStep || percent != lastPercent) {
-                    lastStep = step
-                    lastPercent = percent
-                    setProgressAsync(workDataOf(KEY_STEP to step.name, KEY_PROGRESS to p))
-                    notify(step.label, p)
+            batch.forEachIndexed { k, (trackId, request) ->
+                try {
+                    val out = LineDubber(applicationContext, File(dir, "work"), voice).run(request) { step, p ->
+                        // Progress over the whole batch, one line after another.
+                        val overall = (k + p) / batch.size
+                        val percent = (overall * 100).toInt()
+                        if (step != lastStep || percent != lastPercent) {
+                            lastStep = step
+                            lastPercent = percent
+                            setProgressAsync(workDataOf(KEY_STEP to step.name, KEY_PROGRESS to overall, KEY_LINE to k + 1, KEY_LINES to batch.size))
+                            notify(if (batch.size > 1) "${step.label} câu ${k + 1}/${batch.size}" else step.label, overall)
+                        }
+                    }
+                    // The audio file outlives the work folder's scratch files.
+                    val kept = File(dir, "line_$k.wav")
+                    if (!out.file.renameTo(kept)) out.file.copyTo(kept, overwrite = true)
+                    File(dir, "work").deleteRecursively()
+                    done.put(encodeOutput(out, kept).put("track", trackId).put("request", encodeRequest(request)))
+                    online = online || out.usedOnline
+                    if (out.note != null) note = out.note
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    lastError = (e as? StepUnavailableException)?.message ?: "${e.javaClass.simpleName}: ${e.message}"
+                    DubLog.w(DubbingPipeline.TAG, "line job $id: line ${k + 1}/${batch.size} failed", e)
                 }
             }
-            // The audio file outlives the work folder's scratch files.
-            val kept = File(dir, "line.wav")
-            if (!out.file.renameTo(kept)) out.file.copyTo(kept, overwrite = true)
-            File(dir, "work").deleteRecursively()
-            resultFile(applicationContext, id.toString()).writeText(encodeOutput(out, kept).put("request", encodeRequest(request)).toString())
-            return Result.success(workDataOf(KEY_ONLINE to out.usedOnline, KEY_NOTE to out.note))
-        } catch (e: StepUnavailableException) {
-            return fail(e.message ?: "Bước này chưa dùng được trên máy")
+            if (done.length() == 0) return fail(lastError ?: "Không lồng lại được câu nào")
+            resultFile(applicationContext, id.toString()).writeText(JSONObject().put("lines", done).toString())
+            return Result.success(
+                workDataOf(KEY_ONLINE to online, KEY_NOTE to note, KEY_FAILED to batch.size - done.length(), KEY_ERROR to lastError),
+            )
         } catch (e: CancellationException) {
             DubLog.i(DubbingPipeline.TAG, "line job $id cancelled")
             throw e
@@ -117,13 +138,17 @@ class LineDubWorker(context: Context, params: WorkerParameters) : CoroutineWorke
 
     /** The new line, as the editor reads it back. */
     class LineResult(
+        val trackId: String,
         val file: File, val durationMs: Long, val text: String, val sourceText: String, val emotion: String,
         val geminiVoice: String?, val pitch: Float, val playbackSpeed: Float, val gain: Float,
         val request: LineDubber.Request,
     )
 
     companion object {
-        const val KEY_REQUEST = "request"
+        const val KEY_BATCH = "batch"
+        const val KEY_LINE = "line"
+        const val KEY_LINES = "lines"
+        const val KEY_FAILED = "failed"
         const val KEY_STEP = "step"
         const val KEY_PROGRESS = "progress"
         const val KEY_ERROR = "error"
@@ -133,15 +158,28 @@ class LineDubWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         private const val NOTIFICATION_ID = 4109
         const val UNIQUE_NAME = "redub"
 
-        fun trackTag(trackId: String) = "track:$trackId"
-
-        fun enqueue(context: Context, projectId: String, trackId: String, request: LineDubber.Request) {
+        /** Dubs again each DUB track of [lines] (track id to request), one after another. */
+        fun enqueue(context: Context, projectId: String, lines: List<Pair<String, LineDubber.Request>>) {
+            val file = File(File(context.filesDir, "dub"), "redub_${System.currentTimeMillis()}.json")
+            file.parentFile?.mkdirs()
+            file.writeText(encodeBatch(lines).toString())
             val req = OneTimeWorkRequestBuilder<LineDubWorker>()
                 .addTag(DubbingWorker.projectTag(projectId))
-                .addTag(trackTag(trackId))
-                .setInputData(workDataOf(KEY_REQUEST to encodeRequest(request).toString()))
+                .setInputData(workDataOf(KEY_BATCH to file.absolutePath))
                 .build()
             WorkManager.getInstance(context).enqueueUniqueWork(UNIQUE_NAME, ExistingWorkPolicy.KEEP, req)
+        }
+
+        fun encodeBatch(lines: List<Pair<String, LineDubber.Request>>): JSONArray = JSONArray().apply {
+            lines.forEach { (track, r) -> put(JSONObject().put("track", track).put("request", encodeRequest(r))) }
+        }
+
+        fun decodeBatch(json: String): List<Pair<String, LineDubber.Request>> {
+            val a = JSONArray(json)
+            return (0 until a.length()).map { i ->
+                val o = a.getJSONObject(i)
+                o.getString("track") to decodeRequest(o.getJSONObject("request").toString())
+            }
         }
 
         fun resultFile(context: Context, jobId: String) = File(DubbingWorker.jobDir(context, jobId), "line.json")
@@ -175,14 +213,18 @@ class LineDubWorker(context: Context, params: WorkerParameters) : CoroutineWorke
             put("playbackSpeed", out.playbackSpeed.toDouble()); put("gain", out.gain.toDouble())
         }
 
-        fun decode(json: String): LineResult {
-            val o = JSONObject(json)
-            return LineResult(
-                File(o.getString("file")), o.getLong("durationMs"), o.getString("text"), o.optString("sourceText"), o.optString("emotion"),
-                o.optString("geminiVoice").ifEmpty { null }, o.optDouble("pitch", 1.0).toFloat(),
-                o.optDouble("playbackSpeed", 1.0).toFloat(), o.optDouble("gain", 1.0).toFloat(),
-                decodeRequest(o.getJSONObject("request").toString()),
-            )
+        fun decode(json: String): List<LineResult> {
+            val a = JSONObject(json).getJSONArray("lines")
+            return (0 until a.length()).map { i ->
+                val o = a.getJSONObject(i)
+                LineResult(
+                    o.getString("track"),
+                    File(o.getString("file")), o.getLong("durationMs"), o.getString("text"), o.optString("sourceText"), o.optString("emotion"),
+                    o.optString("geminiVoice").ifEmpty { null }, o.optDouble("pitch", 1.0).toFloat(),
+                    o.optDouble("playbackSpeed", 1.0).toFloat(), o.optDouble("gain", 1.0).toFloat(),
+                    decodeRequest(o.getJSONObject("request").toString()),
+                )
+            }
         }
     }
 }

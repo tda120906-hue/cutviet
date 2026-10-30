@@ -126,6 +126,12 @@ interface TextTranslator : AutoCloseable {
     /** A shorter version of a translated line, at most [maxSyllables], or null. */
     suspend fun shorten(source: String, text: String, language: SourceLanguage, maxSyllables: Int): String? = null
 
+    /**
+     * [text] with its English words respelled for a Vietnamese voice ("Facebook" → "phây-búc"),
+     * or null when the engine is not loaded ([SpeakableText] then uses its word list).
+     */
+    suspend fun speakable(text: String): String? = null
+
     override fun close() {}
 }
 

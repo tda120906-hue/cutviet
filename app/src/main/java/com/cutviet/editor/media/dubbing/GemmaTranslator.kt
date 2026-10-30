@@ -63,6 +63,13 @@ class GemmaTranslator(
             answer?.let { TranslationPrompt.parse(it, 1)?.firstOrNull() }
         }
 
+    override suspend fun speakable(text: String): String? =
+        withContext(Dispatchers.IO) {
+            val llm = llm ?: return@withContext null
+            val answer = runCatching { ask(llm, TranslationPrompt.speakable(text)) }.getOrNull()
+            answer?.let { TranslationPrompt.parse(it, 1)?.firstOrNull() }
+        }
+
     override fun close() {
         llm?.close()
         llm = null

@@ -2,6 +2,7 @@ package com.cutviet.editor.ui.editor
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -13,6 +14,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -43,8 +46,9 @@ import com.cutviet.editor.ui.theme.Accent
 import com.cutviet.editor.ui.theme.TextDim
 
 /**
- * "Lồng lại câu này" for one DUB track: listen to its part of the video and translate it again,
- * or read the corrected text; either in the line's own voice or another person's.
+ * "Sửa câu lồng tiếng" for one DUB track: correct its text and read it again, listen to its part
+ * of the video and translate it again, change its voice (or the voice of every line of that
+ * person), cut it in two at the playhead, or delete it.
  */
 @Composable
 fun RedubDialog(vm: EditorViewModel, trackId: String, onDismiss: () -> Unit) {
@@ -56,13 +60,15 @@ fun RedubDialog(vm: EditorViewModel, trackId: String, onDismiss: () -> Unit) {
     val canOnline = settings.mode != DubMode.OFFLINE && settings.geminiKey.isNotBlank()
     var text by remember(trackId) { mutableStateOf(info.text) }
     var choice by remember(trackId) { mutableStateOf(choices.first()) }
+    val samePerson = remember(trackId) { vm.sameSpeakerLines(track).size }
+    var wholePerson by remember(trackId) { mutableStateOf(false) }
     var language by remember(trackId) {
         mutableStateOf(runCatching { SourceLanguage.valueOf(info.language) }.getOrNull()?.takeIf { it.dubbable } ?: SourceLanguage.ENGLISH)
     }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(Modifier.fillMaxSize().background(Color(0xFF101014))) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Lồng lại câu này", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f).padding(start = 8.dp))
+                Text("Sửa câu lồng tiếng", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f).padding(start = 8.dp))
                 TextButton(onClick = onDismiss) { Text("Đóng", color = Accent) }
             }
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp)) {
@@ -89,30 +95,51 @@ fun RedubDialog(vm: EditorViewModel, trackId: String, onDismiss: () -> Unit) {
                         Text(c.label, color = Color.White, fontSize = 14.sp)
                     }
                 }
+                if (info.speaker != null && samePerson > 1) {
+                    Row(Modifier.fillMaxWidth().clickable { wholePerson = !wholePerson }, verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = wholePerson, onCheckedChange = { wholePerson = it }, colors = CheckboxDefaults.colors(checkedColor = Accent))
+                        Text("Đổi giọng cho cả $samePerson câu của ${info.speaker}", color = Color.White, fontSize = 14.sp)
+                    }
+                    if (wholePerson) {
+                        Text("Các câu khác của ${info.speaker} giữ nguyên lời, chỉ được đọc lại bằng giọng đã chọn.", color = TextDim, fontSize = 12.sp)
+                    }
+                }
                 Text(
-                    if (canOnline) "Giọng Gemini cần mạng; mất mạng hay hết lượt thì máy đọc thay."
-                    else "Chưa dùng được Gemini (chưa có khoá hoặc đang để Offline) nên máy sẽ đọc, cao độ theo giọng đã chọn.",
+                    if (canOnline) "Giọng Gemini cần mạng; mất mạng hay hết lượt thì máy đọc thay. Chữ tiếng Anh trong câu được đọc bằng tiếng Anh, cùng một giọng."
+                    else "Chưa dùng được Gemini (chưa có khoá hoặc đang để Offline) nên máy sẽ đọc, cao độ theo giọng đã chọn. Chữ tiếng Anh được đọc theo cách đọc của người Việt.",
                     color = TextDim, fontSize = 12.sp,
                 )
 
                 Spacer(Modifier.height(16.dp))
                 Button(
-                    onClick = { vm.startRedub(trackId, null, choice, language) },
-                    enabled = vm.redubStatus == null,
+                    onClick = { vm.startRedub(trackId, text, choice, language, wholePerson) },
+                    enabled = vm.redubStatus == null && text.isNotBlank(),
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(containerColor = Accent),
-                ) { Text("Nghe & dịch lại từ video") }
+                ) { Text("Đọc lại lời đã sửa") }
+                Text(
+                    "Giữ nguyên lời ở trên, chỉ tạo lại giọng (dùng khi dịch sai vài chữ hay muốn đổi giọng).",
+                    color = TextDim, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
+                )
+                OutlinedButton(
+                    onClick = { vm.startRedub(trackId, null, choice, language, wholePerson) },
+                    enabled = vm.redubStatus == null,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Nghe & dịch lại từ video", color = Color.White) }
                 Text(
                     "AI nghe lại đúng đoạn video của câu này và dịch lại theo ngữ cảnh các câu trước và sau, rồi đọc bằng giọng đã chọn.",
                     color = TextDim, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
                 )
-                OutlinedButton(
-                    onClick = { vm.startRedub(trackId, text, choice, language) },
-                    enabled = vm.redubStatus == null && text.isNotBlank(),
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Đọc lại lời đã sửa", color = Color.White) }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { vm.splitDub(trackId) }, modifier = Modifier.weight(1f)) {
+                        Text("Tách câu ở đầu phát", color = Color.White, fontSize = 13.sp)
+                    }
+                    OutlinedButton(onClick = { vm.deleteDubLine(trackId) }, modifier = Modifier.weight(1f)) {
+                        Text("Xoá câu", color = Color(0xFFFF6B6B), fontSize = 13.sp)
+                    }
+                }
                 Text(
-                    "Giữ nguyên lời bạn sửa ở trên, chỉ tạo lại giọng (dùng khi dịch sai một chữ hay muốn đổi giọng).",
+                    "Tách: đưa đầu phát (vạch trắng) tới chỗ cần cắt trên timeline rồi bấm; mỗi nửa giữ phần lời tương ứng và lồng lại riêng được. Xoá: bỏ hẳn câu này, Hoàn tác để lấy lại.",
                     color = TextDim, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp),
                 )
                 vm.redubStatus?.let {
