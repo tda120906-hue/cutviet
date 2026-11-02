@@ -26,18 +26,20 @@ import java.io.File
 
 /**
  * Background job that dubs lines again ([LineDubber]), one after another (one line, or every line
- * of a person whose voice changes), and writes the new lines to [resultFile]; the editor puts each
- * in place of its old DUB track when the job succeeds. A line that fails is left as it was.
+ * in a voice that changes), and writes the new lines to [resultFile]; the editor puts each in place
+ * of its old DUB track when the job succeeds. A line that fails is left as it was. Jobs queue up
+ * behind each other, so a job always ends in success (with [KEY_DONE] lines done and the last
+ * error) to let the ones waiting behind it run.
  */
 class LineDubWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
         DubLog.init(applicationContext)
         val batch = runCatching { decodeBatch(File(inputData.getString(KEY_BATCH)!!).readText()) }.getOrNull()
-            ?: return Result.failure(error("Thiếu thông tin câu cần lồng lại"))
+            ?: return fail("Thiếu thông tin câu cần lồng lại")
         if (runAttemptCount > 0) {
             DubLog.w(DubbingPipeline.TAG, "line job $id was interrupted last time, not restarting")
-            return Result.failure(error("Lần lồng lại trước bị dừng giữa chừng vì app bị đóng. Hãy thử lại."))
+            return fail("Lần lồng lại trước bị dừng giữa chừng vì app bị đóng. Hãy thử lại.")
         }
         val dir = DubbingWorker.jobDir(applicationContext, id.toString()).apply { deleteRecursively(); mkdirs() }
         setForeground(foregroundInfo("Đang chuẩn bị", 0f))
@@ -80,24 +82,26 @@ class LineDubWorker(context: Context, params: WorkerParameters) : CoroutineWorke
             if (done.length() == 0) return fail(lastError ?: "Không lồng lại được câu nào")
             resultFile(applicationContext, id.toString()).writeText(JSONObject().put("lines", done).toString())
             return Result.success(
-                workDataOf(KEY_ONLINE to online, KEY_NOTE to note, KEY_FAILED to batch.size - done.length(), KEY_ERROR to lastError),
+                workDataOf(
+                    KEY_ONLINE to online, KEY_NOTE to note, KEY_DONE to done.length(),
+                    KEY_FAILED to batch.size - done.length(), KEY_ERROR to lastError,
+                ),
             )
         } catch (e: CancellationException) {
             DubLog.i(DubbingPipeline.TAG, "line job $id cancelled")
             throw e
         } catch (e: Exception) {
             DubLog.w(DubbingPipeline.TAG, "line job $id failed", e)
-            return Result.failure(error("Lồng lại thất bại: ${e.message}"))
+            return fail("Lồng lại thất bại: ${e.message}")
         } finally {
             withContext(NonCancellable + Dispatchers.Main) { voice.shutdown() }
         }
     }
 
-    private fun error(message: String) = workDataOf(KEY_ERROR to message)
-
+    /** Nothing done: a success all the same, so the jobs queued behind this one still run. */
     private fun fail(message: String): Result {
         DubLog.w(DubbingPipeline.TAG, "line job $id failed: $message")
-        return Result.failure(error(message))
+        return Result.success(workDataOf(KEY_DONE to 0, KEY_ERROR to message))
     }
 
     private fun notify(text: String, progress: Float) {
@@ -149,6 +153,7 @@ class LineDubWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         const val KEY_LINE = "line"
         const val KEY_LINES = "lines"
         const val KEY_FAILED = "failed"
+        const val KEY_DONE = "done"
         const val KEY_STEP = "step"
         const val KEY_PROGRESS = "progress"
         const val KEY_ERROR = "error"
@@ -158,7 +163,10 @@ class LineDubWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         private const val NOTIFICATION_ID = 4109
         const val UNIQUE_NAME = "redub"
 
-        /** Dubs again each DUB track of [lines] (track id to request), one after another. */
+        /**
+         * Dubs again each DUB track of [lines] (track id to request), one after another; after the
+         * jobs already queued, if any.
+         */
         fun enqueue(context: Context, projectId: String, lines: List<Pair<String, LineDubber.Request>>) {
             val file = File(File(context.filesDir, "dub"), "redub_${System.currentTimeMillis()}.json")
             file.parentFile?.mkdirs()
@@ -167,7 +175,7 @@ class LineDubWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                 .addTag(DubbingWorker.projectTag(projectId))
                 .setInputData(workDataOf(KEY_BATCH to file.absolutePath))
                 .build()
-            WorkManager.getInstance(context).enqueueUniqueWork(UNIQUE_NAME, ExistingWorkPolicy.KEEP, req)
+            WorkManager.getInstance(context).enqueueUniqueWork(UNIQUE_NAME, ExistingWorkPolicy.APPEND_OR_REPLACE, req)
         }
 
         fun encodeBatch(lines: List<Pair<String, LineDubber.Request>>): JSONArray = JSONArray().apply {

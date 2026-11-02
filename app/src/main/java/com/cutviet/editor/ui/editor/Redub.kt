@@ -9,9 +9,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
@@ -40,6 +42,7 @@ import com.cutviet.editor.media.dubbing.DubMode
 import com.cutviet.editor.media.dubbing.DubSettings
 import com.cutviet.editor.media.dubbing.RedubChoices
 import com.cutviet.editor.media.dubbing.SourceLanguage
+import com.cutviet.editor.media.dubbing.VoiceChoice
 import com.cutviet.editor.model.ProjectOps
 import com.cutviet.editor.ui.formatTime
 import com.cutviet.editor.ui.theme.Accent
@@ -47,8 +50,8 @@ import com.cutviet.editor.ui.theme.TextDim
 
 /**
  * "Sửa câu lồng tiếng" for one DUB track: correct its text and read it again, listen to its part
- * of the video and translate it again, change its voice (or the voice of every line of that
- * person), cut it in two at the playhead, or delete it.
+ * of the video and translate it again, change its voice (or the voice of every line read in the
+ * same voice), cut it in two at the playhead, or delete it.
  */
 @Composable
 fun RedubDialog(vm: EditorViewModel, trackId: String, onDismiss: () -> Unit) {
@@ -60,8 +63,8 @@ fun RedubDialog(vm: EditorViewModel, trackId: String, onDismiss: () -> Unit) {
     val canOnline = settings.mode != DubMode.OFFLINE && settings.geminiKey.isNotBlank()
     var text by remember(trackId) { mutableStateOf(info.text) }
     var choice by remember(trackId) { mutableStateOf(choices.first()) }
-    val samePerson = remember(trackId) { vm.sameSpeakerLines(track).size }
-    var wholePerson by remember(trackId) { mutableStateOf(false) }
+    val sameVoice = remember(trackId) { vm.sameVoiceLines(track).size }
+    var allSameVoice by remember(trackId) { mutableStateOf(false) }
     var language by remember(trackId) {
         mutableStateOf(runCatching { SourceLanguage.valueOf(info.language) }.getOrNull()?.takeIf { it.dubbable } ?: SourceLanguage.ENGLISH)
     }
@@ -89,21 +92,8 @@ fun RedubDialog(vm: EditorViewModel, trackId: String, onDismiss: () -> Unit) {
                 Chips(SourceLanguage.entries.filter { it.dubbable }, language, { it.label }) { language = it }
 
                 Label("Giọng đọc")
-                choices.forEach { c ->
-                    Row(Modifier.fillMaxWidth().clickable { choice = c }, verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(selected = c == choice, onClick = { choice = c }, colors = RadioButtonDefaults.colors(selectedColor = Accent))
-                        Text(c.label, color = Color.White, fontSize = 14.sp)
-                    }
-                }
-                if (info.speaker != null && samePerson > 1) {
-                    Row(Modifier.fillMaxWidth().clickable { wholePerson = !wholePerson }, verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = wholePerson, onCheckedChange = { wholePerson = it }, colors = CheckboxDefaults.colors(checkedColor = Accent))
-                        Text("Đổi giọng cho cả $samePerson câu của ${info.speaker}", color = Color.White, fontSize = 14.sp)
-                    }
-                    if (wholePerson) {
-                        Text("Các câu khác của ${info.speaker} giữ nguyên lời, chỉ được đọc lại bằng giọng đã chọn.", color = TextDim, fontSize = 12.sp)
-                    }
-                }
+                VoiceChoiceList(choices, choice) { choice = it }
+                SameVoiceBox(sameVoice, allSameVoice) { allSameVoice = it }
                 Text(
                     if (canOnline) "Giọng Gemini cần mạng; mất mạng hay hết lượt thì máy đọc thay. Chữ tiếng Anh trong câu được đọc bằng tiếng Anh, cùng một giọng."
                     else "Chưa dùng được Gemini (chưa có khoá hoặc đang để Offline) nên máy sẽ đọc, cao độ theo giọng đã chọn. Chữ tiếng Anh được đọc theo cách đọc của người Việt.",
@@ -112,8 +102,8 @@ fun RedubDialog(vm: EditorViewModel, trackId: String, onDismiss: () -> Unit) {
 
                 Spacer(Modifier.height(16.dp))
                 Button(
-                    onClick = { vm.startRedub(trackId, text, choice, language, wholePerson) },
-                    enabled = vm.redubStatus == null && text.isNotBlank(),
+                    onClick = { vm.startRedub(trackId, text, choice, language, allSameVoice) },
+                    enabled = text.isNotBlank(),
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(containerColor = Accent),
                 ) { Text("Đọc lại lời đã sửa") }
@@ -122,8 +112,7 @@ fun RedubDialog(vm: EditorViewModel, trackId: String, onDismiss: () -> Unit) {
                     color = TextDim, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
                 )
                 OutlinedButton(
-                    onClick = { vm.startRedub(trackId, null, choice, language, wholePerson) },
-                    enabled = vm.redubStatus == null,
+                    onClick = { vm.startRedub(trackId, null, choice, language, allSameVoice) },
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text("Nghe & dịch lại từ video", color = Color.White) }
                 Text(
@@ -149,4 +138,73 @@ fun RedubDialog(vm: EditorViewModel, trackId: String, onDismiss: () -> Unit) {
             }
         }
     }
+}
+
+/**
+ * "Đổi giọng" for one DUB track: pick a voice and the line is read again in it, its text kept
+ * (optionally every line read in the same voice). Lines picked one after another wait their turn.
+ */
+@Composable
+fun VoicePickerDialog(vm: EditorViewModel, trackId: String, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val track = vm.project.audios.firstOrNull { it.id == trackId } ?: return
+    val info = remember(trackId) { ProjectOps.dubOrigin(vm.project, track) } ?: return
+    val choices = remember(trackId) { RedubChoices.voices(vm.project, track) }
+    val settings = remember { DubSettings(context) }
+    val canOnline = settings.mode != DubMode.OFFLINE && settings.geminiKey.isNotBlank()
+    var choice by remember(trackId) { mutableStateOf(choices.first()) }
+    val sameVoice = remember(trackId) { vm.sameVoiceLines(track).size }
+    var allSameVoice by remember(trackId) { mutableStateOf(false) }
+    val language = runCatching { SourceLanguage.valueOf(info.language) }.getOrNull()?.takeIf { it.dubbable } ?: SourceLanguage.ENGLISH
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Đổi giọng câu này") },
+        text = {
+            Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState())) {
+                val words = info.text.ifBlank { track.name }
+                Text("Câu ở ${formatTime(track.startMs)}: \"${words.take(90)}\"", color = TextDim, fontSize = 13.sp)
+                VoiceChoiceList(choices, choice) { choice = it }
+                SameVoiceBox(sameVoice, allSameVoice) { allSameVoice = it }
+                if (!canOnline) {
+                    Text(
+                        "Chưa dùng được Gemini (chưa có khoá hoặc đang để Offline): giọng Gemini sẽ do máy đọc, cao độ theo nam/nữ.",
+                        color = TextDim, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { vm.startRedub(trackId, info.text.ifBlank { null }, choice, language, allSameVoice) }) {
+                Text("Đọc lại bằng giọng này", color = Accent)
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Huỷ", color = Accent) } },
+    )
+}
+
+/** Voices to pick from, under the heading of their group (current, Gemini women/men/children, phone). */
+@Composable
+internal fun VoiceChoiceList(choices: List<VoiceChoice>, selected: VoiceChoice, onPick: (VoiceChoice) -> Unit) {
+    var group: String? = null
+    choices.forEach { c ->
+        if (c.group != group) {
+            group = c.group
+            if (c.group.isNotEmpty()) Text(c.group, color = TextDim, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp, start = 4.dp))
+        }
+        Row(Modifier.fillMaxWidth().clickable { onPick(c) }, verticalAlignment = Alignment.CenterVertically) {
+            RadioButton(selected = c == selected, onClick = { onPick(c) }, colors = RadioButtonDefaults.colors(selectedColor = Accent))
+            Text(c.label, color = Color.White, fontSize = 14.sp)
+        }
+    }
+}
+
+/** "Đổi giọng cho cả N câu đang dùng giọng này", shown when other lines share this line's voice. */
+@Composable
+private fun SameVoiceBox(count: Int, checked: Boolean, onChange: (Boolean) -> Unit) {
+    if (count <= 1) return
+    Row(Modifier.fillMaxWidth().padding(top = 4.dp).clickable { onChange(!checked) }, verticalAlignment = Alignment.CenterVertically) {
+        Checkbox(checked = checked, onCheckedChange = onChange, colors = CheckboxDefaults.colors(checkedColor = Accent))
+        Text("Đổi giọng cho cả $count câu đang dùng giọng này", color = Color.White, fontSize = 14.sp)
+    }
+    if (checked) Text("Các câu kia giữ nguyên lời, chỉ được đọc lại bằng giọng đã chọn.", color = TextDim, fontSize = 12.sp)
 }

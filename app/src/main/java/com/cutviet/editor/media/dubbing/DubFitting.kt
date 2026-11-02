@@ -5,7 +5,8 @@ import com.cutviet.editor.model.DubTime
 /**
  * Last step of a dub: lines still longer than their time are played faster (up to [maxDub]) and,
  * if that is not enough, the video under them slower (down to [minVideo]), as [DubTime.plan] lays
- * out. Lines that fit keep their speed; a line is never slowed down. Pure, so it can be unit tested.
+ * out. Lines shorter than their sentence are played a little slower ([DubTime.fill]) so they do
+ * not stop while the mouth still moves. Lines that fit keep their speed. Pure, so it can be unit tested.
  */
 object DubFitting {
     class Result(val segments: List<DubbedSegment>, val slowdowns: List<DubTime.Slowdown>)
@@ -17,6 +18,8 @@ object DubFitting {
         val out = sorted.mapIndexed { i, s ->
             val r = room[i]
             if (r <= 0 || s.durationMs <= 0) return@mapIndexed s
+            val fill = DubTime.fill(s.durationMs, s.rate, s.slotMs)
+            if (fill < 1f) return@mapIndexed s.copy(playbackSpeed = fill)
             // Length at normal speed: offline lines were already read at their TTS rate.
             val natural = s.durationMs * s.rate.toDouble()
             val plan = DubTime.plan(natural / r, maxDub, minVideo)

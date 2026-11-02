@@ -43,4 +43,22 @@ class DubFittingTest {
         assertEquals(1.38f * 0.9f / 1.15f, s.playbackSpeed, 1e-3f)
         assertEquals(0.9f, r.slowdowns.single().factor, 2e-3f)
     }
+
+    @Test
+    fun shortLinesAreSlowedToLastAsLongAsTheMouthMoves() {
+        val r = DubFitting.fit(
+            listOf(
+                line(1000, 2000, 1500),             // Gemini line 25 % short: x0.85 at most
+                line(4000, 2000, 1800),             // 10 % short: x0.9 fills it exactly
+                line(7000, 2000, 1500, rate = 0.85f), // the phone already read it slowest: left alone
+            ),
+            0, 10_000, 1.25f, 0.85f,
+        )
+        assertEquals(0.85f, r.segments[0].playbackSpeed, 1e-4f)
+        assertEquals(0.9f, r.segments[1].playbackSpeed, 1e-4f)
+        assertEquals(1f, r.segments[2].playbackSpeed, 0f)
+        assertEquals(emptyList<DubTime.Slowdown>(), r.slowdowns)
+        assertEquals(1f, DubTime.fill(1950, 1f, 2000), 0f)
+        assertEquals(1f, DubTime.fill(0, 1f, 2000), 0f)
+    }
 }

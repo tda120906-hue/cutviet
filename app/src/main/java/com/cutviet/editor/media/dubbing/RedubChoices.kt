@@ -6,38 +6,48 @@ import com.cutviet.editor.model.DubInfo
 import com.cutviet.editor.model.Project
 import com.cutviet.editor.model.ProjectOps
 
-/** A voice to read a line dubbed again with; [speaker] is the label the track gets ("Nam 1"). */
-data class VoiceChoice(val label: String, val speaker: String?, val voice: LineVoice)
+/**
+ * A voice to read a line dubbed again with. [speaker] is the label the track keeps (only lines of
+ * older dubs have one, "Nam 1"); [group] heads the list the choice is shown in.
+ */
+data class VoiceChoice(val label: String, val speaker: String?, val voice: LineVoice, val group: String = "")
 
-/** What the "Lồng lại câu này" dialog offers for one DUB track. */
+/** What the line editor offers for one DUB track. */
 object RedubChoices {
+    const val GROUP_CURRENT = "Đang dùng"
+    const val GROUP_PHONE = "Giọng của máy (không cần mạng)"
 
     /**
-     * The line's own voice first, then the other voices of the project's dub (to fix a line read
-     * in the wrong person's voice), then a new man, woman and child. All keep the line's tone.
+     * The line's own voice first, then every Gemini voice by name (women, men, children), then the
+     * phone's voice for a man, a woman and a child. All keep the line's tone.
      */
     fun voices(p: Project, track: AudioTrack): List<VoiceChoice> {
-        val dubs = p.audios.filter { it.kind == AudioKind.DUB }
-        val known = dubs.mapNotNull { it.dub }
+        val known = p.audios.filter { it.kind == AudioKind.DUB }.mapNotNull { it.dub }
         val own = ProjectOps.dubOrigin(p, track)
         val current = own?.let { voiceOf(it, known) } ?: LineVoice(null, null)
         val out = ArrayList<VoiceChoice>()
-        out += VoiceChoice("Giữ giọng cũ (${describe(own?.speaker, current)})", own?.speaker, current)
-        fun key(v: LineVoice) = v.gemini ?: "phone ${v.gender} ${v.pitch}"
-        val seen = hashSetOf(key(current))
-        for (d in known.sortedBy { it.speaker.orEmpty() }) {
-            val v = voiceOf(d, known)
-            if (!seen.add(key(v))) continue
-            out += VoiceChoice(describe(d.speaker, v), d.speaker, v.copy(emotion = current.emotion))
+        out += VoiceChoice("Giữ giọng hiện tại: ${describe(current)}", own?.speaker, current, GROUP_CURRENT)
+        val here = VoicePresets.of(current)
+        for (preset in VoicePresets.ALL) {
+            if (preset == here) continue
+            out += VoiceChoice(preset.label, null, preset.lineVoice(current.emotion), "Giọng Gemini · ${preset.gender.label}")
         }
-        val used = known.mapNotNull { it.geminiVoice }.toSet() + listOfNotNull(current.gemini)
         for (g in Gender.entries) {
-            val n = known.mapNotNull { it.speaker }.distinct().count { it.startsWith(g.label + " ") } + 1
-            val pool = GeminiDubber.POOLS.getValue(g)
-            val voice = pool.firstOrNull { it !in used } ?: pool.first()
-            out += VoiceChoice("${g.label} mới ($voice)", "${g.label} $n", LineVoice(voice, g, emotion = current.emotion, pitch = DubbingPipeline.pitchFor(g)))
+            val v = LineVoice(null, g, emotion = current.emotion, pitch = DubbingPipeline.pitchFor(g))
+            if (current.gemini == null && current.gender == g) continue
+            out += VoiceChoice("Giọng máy · ${g.label}", null, v, GROUP_PHONE)
         }
         return out
+    }
+
+    /** Lines read in the same voice share this key (a Gemini voice, or the phone's at one pitch). */
+    fun voiceKey(v: LineVoice): String = v.gemini?.let { "$it/${v.gender ?: ""}" } ?: "phone/${v.gender ?: ""}/${v.pitch}"
+
+    /** "Nữ · rõ ràng, chắc giọng (Kore)", "Charon", "giọng máy · Nam". */
+    fun describe(v: LineVoice): String {
+        VoicePresets.of(v)?.let { return it.label }
+        if (v.gemini != null) return listOfNotNull(v.gender?.label, v.gemini).joinToString(" · ")
+        return listOfNotNull("giọng máy", v.gender?.label).joinToString(" · ")
     }
 
     /**
@@ -58,9 +68,6 @@ object RedubChoices {
         val pool = GeminiDubber.POOLS.getValue(gender)
         return LineVoice(pool[(n - 1).coerceAtLeast(0) % pool.size], gender, emotion = d.emotion, pitch = DubbingPipeline.pitchFor(gender))
     }
-
-    private fun describe(speaker: String?, v: LineVoice): String =
-        listOfNotNull(speaker ?: v.gender?.label, v.gemini ?: "giọng máy").joinToString(" · ")
 
     /** Up to [n] lines before and after [track], "what was said → translation", to translate it in context. */
     fun around(p: Project, track: AudioTrack, n: Int = 3): String {

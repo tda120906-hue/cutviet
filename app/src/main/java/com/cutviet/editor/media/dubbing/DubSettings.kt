@@ -23,7 +23,7 @@ class DubSettings(context: Context) {
         get() = prefs.getString("gemini_model", null)?.takeIf { it.isNotBlank() } ?: GeminiLiveTranslator.DEFAULT_MODEL
         set(v) = prefs.edit().putString("gemini_model", v.trim()).apply()
 
-    /** Online style: natural (speakers told apart) or the real-time interpreter. */
+    /** Online style: natural (sentence by sentence, in a chosen voice) or the real-time interpreter. */
     var onlineEngine: OnlineEngine
         get() = runCatching { OnlineEngine.valueOf(prefs.getString("online_engine", null)!!) }.getOrDefault(OnlineEngine.NATURAL)
         set(v) = prefs.edit().putString("online_engine", v.name).apply()
@@ -38,10 +38,10 @@ class DubSettings(context: Context) {
         get() = prefs.getString("gemini_tts_model", null)?.takeIf { it.isNotBlank() } ?: GeminiDubber.DEFAULT_TTS_MODEL
         set(v) = prefs.edit().putString("gemini_tts_model", v.trim()).apply()
 
-    /** Give each person (online) or men, women and children (offline) a voice of their own. */
-    var distinguishSpeakers: Boolean
-        get() = prefs.getBoolean("distinguish_speakers", true)
-        set(v) = prefs.edit().putBoolean("distinguish_speakers", v).apply()
+    /** The Gemini voice ([VoicePreset.id]) a natural online dub reads every line in. */
+    var geminiVoice: String
+        get() = VoicePresets.byId(prefs.getString("gemini_voice", null)).id
+        set(v) = prefs.edit().putString("gemini_voice", v).apply()
 
     /** Test switch: the online branch acts as if Gemini answered 429, to check the offline fallback. */
     var simulateQuota: Boolean

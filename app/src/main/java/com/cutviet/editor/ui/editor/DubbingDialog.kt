@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -28,6 +29,8 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
@@ -68,6 +71,8 @@ import com.cutviet.editor.media.dubbing.DubSettings
 import com.cutviet.editor.media.dubbing.ModelDownloadWorker
 import com.cutviet.editor.media.dubbing.ModelStore
 import com.cutviet.editor.media.dubbing.SourceLanguage
+import com.cutviet.editor.media.dubbing.Gender
+import com.cutviet.editor.media.dubbing.VoicePresets
 import com.cutviet.editor.ui.formatBytes
 import com.cutviet.editor.ui.theme.Accent
 import com.cutviet.editor.ui.theme.Surface2
@@ -112,7 +117,7 @@ private fun DubTab(vm: EditorViewModel, settings: DubSettings, onOpenModels: () 
     var language by remember { mutableStateOf(SourceLanguage.ENGLISH) }
     var mode by remember { mutableStateOf(settings.mode) }
     var engine by remember { mutableStateOf(settings.onlineEngine) }
-    var distinguish by remember { mutableStateOf(settings.distinguishSpeakers) }
+    var preset by remember { mutableStateOf(VoicePresets.byId(settings.geminiVoice)) }
     var original by remember { mutableFloatStateOf(settings.originalVolume) }
     val voices = vm.voice.voices.value
     var voiceName by remember { mutableStateOf(voices.firstOrNull { !it.needsNetwork }?.name ?: voices.firstOrNull()?.name) }
@@ -146,26 +151,29 @@ private fun DubTab(vm: EditorViewModel, settings: DubSettings, onOpenModels: () 
         Chips(OnlineEngine.entries, engine, { it.label }) { engine = it; settings.onlineEngine = it }
         Text(
             when (engine) {
-                OnlineEngine.NATURAL -> "Gemini 3.8 nghe cả đoạn, nhận ra từng người nói (nam, nữ, trẻ em) và giọng điệu của họ, dịch cho vừa thời gian, rồi đọc bằng giọng tự nhiên. Dùng lượt miễn phí trong ngày của khoá; hết lượt thì các câu còn lại đọc bằng giọng của máy."
+                OnlineEngine.NATURAL -> "Gemini 3.8 nghe từng câu (mỗi câu là một đoạn có tiếng nói trong video), dịch cho dài vừa đúng câu đó, rồi đọc bằng giọng tự nhiên chọn ở dưới, đặt đúng lúc người trong video bắt đầu nói. Dùng lượt miễn phí trong ngày của khoá; hết lượt thì các câu còn lại đọc bằng giọng của máy."
                 OnlineEngine.LIVE -> "Gemini Live Translate phiên dịch theo thời gian thực bằng một giọng chung. Nhanh, nhưng giọng đều đều và không phân biệt người nói."
             },
             color = TextDim, fontSize = 12.sp,
         )
     }
 
-    Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text("Phân biệt giọng từng người", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-            Text(
-                if (mode != DubMode.OFFLINE && engine == OnlineEngine.NATURAL) {
-                    "Mỗi người một giọng riêng đúng giới tính. Offline chỉ phân biệt được nam, nữ và trẻ em theo độ cao của giọng."
-                } else {
-                    "Offline: nam, nữ và trẻ em đọc ở độ cao giọng khác nhau, đoán theo giọng gốc."
-                },
-                color = TextDim, fontSize = 12.sp,
-            )
+    if (mode != DubMode.OFFLINE && engine == OnlineEngine.NATURAL) {
+        Label("Giọng lồng tiếng (Gemini)")
+        Chips(Gender.entries, preset.gender, { it.label }) { g ->
+            preset = VoicePresets.ALL.first { it.gender == g }
+            settings.geminiVoice = preset.id
         }
-        Switch(checked = distinguish, onCheckedChange = { distinguish = it; settings.distinguishSpeakers = it })
+        VoicePresets.ALL.filter { it.gender == preset.gender }.forEach { v ->
+            Row(Modifier.fillMaxWidth().clickable { preset = v; settings.geminiVoice = v.id }, verticalAlignment = Alignment.CenterVertically) {
+                RadioButton(selected = v == preset, onClick = { preset = v; settings.geminiVoice = v.id }, colors = RadioButtonDefaults.colors(selectedColor = Accent))
+                Text(v.label.substringAfter(" · "), color = Color.White, fontSize = 14.sp)
+            }
+        }
+        Text(
+            "Mọi câu đọc bằng giọng này. Muốn câu nào giọng khác (người khác nói), chọn câu đó trên timeline rồi bấm Đổi giọng.",
+            color = TextDim, fontSize = 12.sp,
+        )
     }
 
     Label("Giọng tiếng Việt")
@@ -174,7 +182,7 @@ private fun DubTab(vm: EditorViewModel, settings: DubSettings, onOpenModels: () 
     } else {
         Chips(voices, voices.firstOrNull { it.name == voiceName }, { it.label + if (it.needsNetwork) " (mạng)" else "" }) { voiceName = it.name }
         if (mode != DubMode.OFFLINE && engine == OnlineEngine.NATURAL) {
-            Text("Dùng khi chạy offline, hoặc cho các câu Gemini không đọc được.", color = TextDim, fontSize = 12.sp)
+            Text("Giọng của máy: dùng khi chạy offline, hoặc cho các câu Gemini không đọc được.", color = TextDim, fontSize = 12.sp)
         }
     }
 

@@ -20,6 +20,21 @@ object DubTime {
     const val MIN_PIECE_MS = 400L
     /** A line this much longer than its time still counts as fitting. */
     const val TOLERANCE_MS = 120L
+    /**
+     * Slowest a line shorter than its sentence is played (pitch kept), counting the TTS rate it was
+     * read at, so it lasts as long as the mouth moves instead of stopping early.
+     */
+    const val MIN_FILL = 0.85f
+
+    /**
+     * Playback speed for a line of [durationMs] read at TTS [rate] that is shorter than its
+     * sentence [slotMs]: slower until it fills the sentence, not below [MIN_FILL] overall. 1 when
+     * it is not short.
+     */
+    fun fill(durationMs: Long, rate: Float, slotMs: Long): Float {
+        if (durationMs <= 0 || slotMs <= 0 || durationMs >= slotMs - TOLERANCE_MS) return 1f
+        return maxOf(durationMs.toFloat() / slotMs, MIN_FILL / rate).coerceAtMost(1f)
+    }
 
     /** Source time [startMs]..[endMs] of a clip plays at [factor] (below 1 = slower). */
     data class Slowdown(val startMs: Long, val endMs: Long, val factor: Float)
