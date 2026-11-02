@@ -774,8 +774,7 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
             append("Đã lồng tiếng ${lines.size} câu")
             append(if (info.outputData.getBoolean(DubbingWorker.KEY_ONLINE, false)) " (online)" else " (offline)")
             append(if (stems != null) ", giữ nguyên âm thanh nền." else ". Chưa có model tách giọng nên tiếng gốc chỉ được giảm cả đoạn.")
-            val voices = info.outputData.getInt(DubbingWorker.KEY_SPEAKERS, 0)
-            if (voices > 1) append(" Có $voices giọng khác nhau, tên mỗi track ghi ai nói.")
+            if (lines.any { it.info?.geminiVoice != null }) append(" Đổi giọng từng câu: chọn câu trên timeline rồi bấm Đổi giọng.")
             val slowed = info.outputData.getInt(DubbingWorker.KEY_SLOWED, 0)
             if (slowed > 0) append(" Video được làm chậm nhẹ ở $slowed chỗ để câu lồng tiếng vừa.")
             if (fallback != null) append(" Online lỗi nên đã chuyển offline: $fallback")
@@ -789,12 +788,18 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
 
     // ---- dub one line again ----
 
-    /** DUB track the "Lồng lại câu này" dialog is open for. */
+    /** DUB track the line editor ("Sửa câu lồng tiếng") is open for. */
     var redubTrackId by mutableStateOf<String?>(null)
 
-    /** Progress line of the running "dub one line again" job, or null. */
+    /** DUB track the voice picker ("Đổi giọng") is open for. */
+    var voicePickerTrackId by mutableStateOf<String?>(null)
+
+    /** Progress line of the running "dub lines again" jobs, or null. */
     var redubStatus by mutableStateOf<String?>(null)
         private set
+
+    /** Line jobs seen running on this screen, so their end is told once. */
+    private val redubSeen = HashSet<java.util.UUID>()
 
     init {
         watchRedub()
@@ -809,26 +814,34 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
         redubTrackId = a.id
     }
 
-    /** Lines of the same person as DUB track [a] (itself included), in time order. */
-    fun sameSpeakerLines(a: AudioTrack): List<AudioTrack> {
-        val speaker = ProjectOps.dubOrigin(project, a)?.speaker ?: return listOf(a)
-        return project.audios.filter { it.kind == AudioKind.DUB && (it.id == a.id || ProjectOps.dubOrigin(project, it)?.speaker == speaker) }
-            .sortedBy { it.startMs }
+    fun openVoicePicker() {
+        val a = selectedAudio?.takeIf { it.kind == AudioKind.DUB } ?: return
+        if (ProjectOps.dubOrigin(project, a) == null) {
+            toast = "Không tìm thấy đoạn video của câu này."
+            return
+        }
+        voicePickerTrackId = a.id
+    }
+
+    /** DUB lines read in the same voice as [a] (itself included), in time order. */
+    fun sameVoiceLines(a: AudioTrack): List<AudioTrack> {
+        val dubs = project.audios.filter { it.kind == AudioKind.DUB }
+        val known = dubs.mapNotNull { it.dub }
+        fun key(t: AudioTrack) = ProjectOps.dubOrigin(project, t)?.let { RedubChoices.voiceKey(RedubChoices.voiceOf(it, known)) }
+        val mine = key(a) ?: return listOf(a)
+        return dubs.filter { it.id == a.id || key(it) == mine }.sortedBy { it.startMs }
     }
 
     /**
      * Dubs DUB track [trackId] again in the background: listened to and translated again when
-     * [text] is null, else [text] read as is, in [choice]'s voice. With [wholePerson] every other
-     * line of the same person is read again in that voice too (their text kept). The new lines
-     * take the old ones' places when done.
+     * [text] is null, else [text] read as is, in [choice]'s voice. With [sameVoice] every other
+     * line read in the same voice as this one is read again in [choice]'s voice too (their text
+     * kept). The new lines take the old ones' places when done. While another line is being
+     * dubbed again, this one waits its turn.
      */
-    fun startRedub(trackId: String, text: String?, choice: VoiceChoice, language: SourceLanguage, wholePerson: Boolean = false) {
+    fun startRedub(trackId: String, text: String?, choice: VoiceChoice, language: SourceLanguage, sameVoice: Boolean = false) {
         val a = project.audios.firstOrNull { it.id == trackId } ?: return
-        if (redubStatus != null) {
-            toast = "Đang lồng lại câu khác, đợi xong đã."
-            return
-        }
-        val tracks = if (wholePerson) sameSpeakerLines(a) else listOf(a)
+        val tracks = if (sameVoice) sameVoiceLines(a) else listOf(a)
         val lines = tracks.mapNotNull { t ->
             val info = ProjectOps.dubOrigin(project, t) ?: return@mapNotNull null
             // Time the line has on the timeline (longer where the video was slowed for it).
@@ -838,18 +851,23 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
             val own = t.id == a.id
             val words = if (own) text?.trim() else info.text.ifBlank { t.name.substringAfter(": ") }
             val voice = choice.voice.copy(emotion = if (own) choice.voice.emotion else RedubChoices.voiceOf(info).emotion)
+            // A line of an older dub keeps its person's label only while it keeps that voice.
+            val speaker = if (own || choice.speaker == null) choice.speaker else info.speaker
             t.id to LineDubber.Request(
                 info.sourceUri, info.sourceStartMs, info.sourceEndMs, room, language, words, info.sourceText,
-                RedubChoices.around(project, t), voice, info.phoneVoice, choice.speaker,
+                RedubChoices.around(project, t), voice, info.phoneVoice, speaker,
             )
         }
         if (lines.isEmpty()) {
             toast = "Không tìm thấy đoạn video của câu này."
             return
         }
+        val busy = redubStatus != null
         LineDubWorker.enqueue(getApplication(), project.id, lines)
-        redubStatus = if (lines.size > 1) "Đang chuẩn bị đọc lại ${lines.size} câu…" else "Đang chuẩn bị lồng lại câu…"
+        if (busy) toast = "Đã xếp hàng: làm xong câu đang lồng thì làm tới câu này."
+        else redubStatus = if (lines.size > 1) "Đang chuẩn bị đọc lại ${lines.size} câu…" else "Đang chuẩn bị lồng lại câu…"
         redubTrackId = null
+        voicePickerTrackId = null
     }
 
     /** Cuts dubbed line [id] (by default the selected one) in two at the playhead. */
@@ -875,38 +893,55 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
         WorkManager.getInstance(getApplication<Application>()).cancelUniqueWork(LineDubWorker.UNIQUE_NAME)
     }
 
+    /**
+     * Follows the line jobs of this project (they run one after another): shows the running one's
+     * progress and how many wait, and puts each finished job's lines in place (exactly once).
+     */
     private fun watchRedub() {
         val app = getApplication<Application>()
         viewModelScope.launch {
-            WorkManager.getInstance(app).getWorkInfosForUniqueWorkFlow(LineDubWorker.UNIQUE_NAME).collect { infos ->
-                val info = infos.lastOrNull { it.tags.contains(DubbingWorker.projectTag(project.id)) } ?: return@collect
-                if (!info.state.isFinished) {
-                    val step = info.progress.getString(LineDubWorker.KEY_STEP)
-                        ?.let { runCatching { LineDubber.Step.valueOf(it) }.getOrNull() }
-                    val pct = (info.progress.getFloat(LineDubWorker.KEY_PROGRESS, 0f) * 100).toInt()
-                    val n = info.progress.getInt(LineDubWorker.KEY_LINES, 1)
-                    val k = info.progress.getInt(LineDubWorker.KEY_LINE, 1)
-                    redubStatus = when {
-                        step == null -> "Đang chuẩn bị lồng lại…"
-                        n > 1 -> "Lồng lại câu $k/$n: ${step.label}… $pct%"
-                        else -> "Lồng lại câu: ${step.label}… $pct%"
+            WorkManager.getInstance(app).getWorkInfosForUniqueWorkFlow(LineDubWorker.UNIQUE_NAME).collect { all ->
+                val infos = all.filter { it.tags.contains(DubbingWorker.projectTag(project.id)) }
+                infos.filter { !it.state.isFinished }.forEach { redubSeen += it.id }
+                for (info in infos.filter { it.state.isFinished }) {
+                    val told = redubSeen.remove(info.id)
+                    when (info.state) {
+                        WorkInfo.State.SUCCEEDED -> applyRedubResult(app, info, told)
+                        WorkInfo.State.FAILED -> if (told) toast = info.outputData.getString(LineDubWorker.KEY_ERROR) ?: "Lồng lại thất bại."
+                        else -> if (told) toast = "Đã huỷ lồng lại."
                     }
-                    return@collect
                 }
-                val wasRunning = redubStatus != null
-                redubStatus = null
-                when (info.state) {
-                    WorkInfo.State.SUCCEEDED -> applyRedubResult(app, info)
-                    WorkInfo.State.FAILED -> if (wasRunning) toast = info.outputData.getString(LineDubWorker.KEY_ERROR) ?: "Lồng lại thất bại."
-                    else -> if (wasRunning) toast = "Đã huỷ lồng lại."
+                val running = infos.firstOrNull { it.state == WorkInfo.State.RUNNING }
+                val waiting = infos.count { it.state == WorkInfo.State.ENQUEUED || it.state == WorkInfo.State.BLOCKED }
+                redubStatus = when {
+                    running == null && waiting == 0 -> null
+                    running == null -> "Đang chuẩn bị lồng lại…"
+                    else -> {
+                        val step = running.progress.getString(LineDubWorker.KEY_STEP)
+                            ?.let { runCatching { LineDubber.Step.valueOf(it) }.getOrNull() }
+                        val pct = (running.progress.getFloat(LineDubWorker.KEY_PROGRESS, 0f) * 100).toInt()
+                        val n = running.progress.getInt(LineDubWorker.KEY_LINES, 1)
+                        val k = running.progress.getInt(LineDubWorker.KEY_LINE, 1)
+                        val line = when {
+                            step == null -> "Đang chuẩn bị lồng lại…"
+                            n > 1 -> "Lồng lại câu $k/$n: ${step.label}… $pct%"
+                            else -> "Lồng lại câu: ${step.label}… $pct%"
+                        }
+                        if (waiting > 0) "$line · còn $waiting lượt chờ" else line
+                    }
                 }
             }
         }
     }
 
-    private suspend fun applyRedubResult(app: Application, info: WorkInfo) {
+    private suspend fun applyRedubResult(app: Application, info: WorkInfo, told: Boolean) {
         val file = LineDubWorker.resultFile(app, info.id.toString())
-        if (!file.exists()) return // already applied
+        if (!file.exists()) {
+            // Nothing to place: already placed, or no line could be done (said once).
+            val error = info.outputData.getString(LineDubWorker.KEY_ERROR)
+            if (told && info.outputData.getInt(LineDubWorker.KEY_DONE, -1) == 0) toast = error ?: "Không lồng lại được câu nào."
+            return
+        }
         val results = withContext(Dispatchers.IO) {
             runCatching { LineDubWorker.decode(file.readText()) }.getOrNull().also { file.renameTo(File(file.parentFile, "line_applied.json")) }
         }

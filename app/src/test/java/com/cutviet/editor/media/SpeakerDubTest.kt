@@ -45,42 +45,8 @@ class SpeakerDubTest {
     }
 
     @Test
-    fun everyPersonGetsAVoiceOfTheirOwnAndOfTheirGender() {
-        val speakers = listOf(
-            GeminiDubber.Speaker("A", Gender.MALE, "a man in his 30s"),
-            GeminiDubber.Speaker("B", Gender.FEMALE, "a young woman, bright voice"),
-            GeminiDubber.Speaker("C", Gender.MALE, "an elderly man, gravelly"),
-            GeminiDubber.Speaker("D", Gender.CHILD, "a small boy"),
-        )
-        val roles = GeminiDubber.cast(speakers, distinguish = true, main = "A")
-        assertEquals(listOf("Nam 1", "Nữ 1", "Nam 2", "Trẻ em 1"), speakers.map { roles.getValue(it.id).label })
-        assertEquals(4, roles.values.map { it.voice }.toSet().size)
-        assertTrue(roles.getValue("A").voice in GeminiDubber.POOLS.getValue(Gender.MALE))
-        assertTrue(roles.getValue("B").voice in GeminiDubber.POOLS.getValue(Gender.FEMALE))
-        assertEquals("Algenib", roles.getValue("C").voice)
-        assertEquals("Leda", roles.getValue("B").voice)
-
-        // Off: one shared voice, the main speaker's, and no labels.
-        val one = GeminiDubber.cast(speakers, distinguish = false, main = "B")
-        assertEquals(1, one.values.toSet().size)
-        assertEquals(Gender.FEMALE, one.getValue("A").gender)
-        assertNull(one.getValue("A").label)
-    }
-
-    @Test
-    fun peopleAreVoicedOneAfterAnotherMostLinesFirst() {
-        val a = GeminiDubber.Role("Nam 1", "Charon", Gender.MALE, "")
-        val b = GeminiDubber.Role("Nữ 1", "Kore", Gender.FEMALE, "")
-        fun h(i: Int, who: String, emotion: String = "") = GeminiDubber.Heard(i, who, "src", "câu số $i", emotion)
-        val lines = listOf(h(0, "B"), h(1, "A"), h(2, "A"), h(3, "A", "laughing"), h(4, "B"), h(5, "A"))
-        val order = GeminiDubber.voicingOrder(lines) { if (it.speaker == "A") a else b }
-        // Every line once, each person's lines together and in time order, whatever their tone.
-        assertEquals(listOf(listOf(1, 2, 3, 5), listOf(0, 4)), order.map { g -> g.map { it.index } })
-    }
-
-    @Test
     fun everyLineOfAPersonIsDescribedTheSameWayAndToneIsATag() {
-        val role = GeminiDubber.Role("Nam 1", "Charon", Gender.MALE, "a man in his 40s, deep and calm")
+        val role = GeminiDubber.Role("Charon", Gender.MALE, "a man in his 40s, deep and calm")
         val plain = GeminiDubber.ttsPrompt(role, "", "Chào anh.")
         val laughing = GeminiDubber.ttsPrompt(role, "laughing", "Thật à?")
         // Same directions for both lines; only the transcript differs.
@@ -91,7 +57,7 @@ class SpeakerDubTest {
         assertEquals("[annoyed]", GeminiDubber.audioTag("Annoyed"))
         assertNull(GeminiDubber.audioTag("neutral"))
         assertNull(GeminiDubber.audioTag("tức giận"))
-        val child = GeminiDubber.Role("Trẻ em 1", "Leda", Gender.CHILD, "")
+        val child = GeminiDubber.Role("Leda", Gender.CHILD, "")
         assertTrue(GeminiDubber.persona(child).contains("child"))
     }
 

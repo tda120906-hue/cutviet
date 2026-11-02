@@ -261,6 +261,7 @@ private fun EditorContent(vm: EditorViewModel, onBack: () -> Unit) {
         vm.project.overlays.firstOrNull { it.id == id }?.let { EraserDialog(vm, it) }
     }
     vm.redubTrackId?.let { RedubDialog(vm, it, onDismiss = { vm.redubTrackId = null }) }
+    vm.voicePickerTrackId?.let { VoicePickerDialog(vm, it, onDismiss = { vm.voicePickerTrackId = null }) }
     if (vm.showDubbing) DubbingDialog(vm, onDismiss = { vm.showDubbing = false; vm.dubbingTab = 0 }, initialTab = vm.dubbingTab)
     if (vm.showSubtitleDialog) {
         SubtitleDialog(vm, onDismiss = { vm.showSubtitleDialog = false }, onOpenModels = {
@@ -340,8 +341,9 @@ private fun Toolbar(vm: EditorViewModel, onAddMedia: () -> Unit, onAddMusic: () 
             if (vm.selectedAudio?.kind == AudioKind.VOICE) add(Tool("Sửa giọng đọc", Icons.Filled.RecordVoiceOver) { vm.openPanel(Panel.VOICE) })
             val dub = vm.selectedAudio?.kind == AudioKind.DUB
             if (dub) {
-                add(0, Tool("Sửa câu lồng tiếng", Icons.Filled.Translate) { vm.openRedub() })
-                add(1, Tool("Tách câu", Icons.Filled.VerticalSplit) { vm.splitDub() })
+                add(0, Tool("Đổi giọng", Icons.Filled.RecordVoiceOver) { vm.openVoicePicker() })
+                add(1, Tool("Sửa câu lồng tiếng", Icons.Filled.Translate) { vm.openRedub() })
+                add(2, Tool("Tách câu", Icons.Filled.VerticalSplit) { vm.splitDub() })
             }
             add(Tool("Đến đầu phát", Icons.Filled.VerticalAlignCenter) { vm.updateSelectedAudio { it.copy(startMs = vm.playheadMs) } })
             add(Tool(if (dub) "Xóa câu" else "Xóa", Icons.Filled.Delete, danger = true) { vm.deleteSelectedAudio() })

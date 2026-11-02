@@ -2,6 +2,7 @@ package com.cutviet.editor.media
 
 import com.cutviet.editor.media.dubbing.Gender
 import com.cutviet.editor.media.dubbing.RedubChoices
+import com.cutviet.editor.media.dubbing.VoicePresets
 import com.cutviet.editor.model.AudioKind
 import com.cutviet.editor.model.AudioTrack
 import com.cutviet.editor.model.Clip
@@ -53,21 +54,48 @@ class RedubTest {
     }
 
     @Test
-    fun voicesOfferTheLineOwnThenOthersThenNewPeople() {
-        val man = DubInfo("content://a", 2000, 3000, "hi", "chào", "ENGLISH", "Nam 1", "Charon", "MALE", "deep voice", "excited")
-        val woman = DubInfo("content://a", 4000, 5000, "yes", "vâng", "ENGLISH", "Nữ 1", "Kore", "FEMALE", "calm")
-        val t1 = dub(1000, "Nam 1: chào", man)
-        val p = Project(name = "p", clips = listOf(a), audios = listOf(t1, dub(3000, "Nữ 1: vâng", woman), dub(5000, "Nam 1: ừ", man.copy(text = "ừ"))))
+    fun voicesOfferTheLineOwnThenEveryNamedVoiceThenThePhone() {
+        val charon = VoicePresets.byId("charon")
+        val man = DubInfo("content://a", 2000, 3000, "hi", "chào", "ENGLISH", null, "Charon", "MALE", charon.description, "excited", pitch = 0.78f)
+        val woman = DubInfo("content://a", 4000, 5000, "yes", "vâng", "ENGLISH", null, "Kore", "FEMALE", VoicePresets.DEFAULT.description, "calm")
+        val t1 = dub(1000, "chào", man)
+        val p = Project(name = "p", clips = listOf(a), audios = listOf(t1, dub(3000, "vâng", woman), dub(5000, "ừ", man.copy(text = "ừ"))))
         val v = RedubChoices.voices(p, t1)
-        assertEquals(listOf("Charon", "Kore", "Puck", "Aoede", "Leda"), v.map { it.voice.gemini })
-        assertEquals(listOf("Nam 1", "Nữ 1", "Nam 2", "Nữ 2", "Trẻ em 1"), v.map { it.speaker })
-        assertTrue(v.first().label.startsWith("Giữ giọng cũ"))
-        // Every choice keeps this line's tone.
+        assertTrue(v.first().label.startsWith("Giữ giọng hiện tại"))
+        assertTrue(v.first().label.contains("Charon"))
+        assertEquals("Charon", v.first().voice.gemini)
+        // Every other named voice once (Charon is the current one), then the phone for a man, a woman and a child.
+        val gemini = v.drop(1).mapNotNull { it.voice.gemini }
+        assertEquals(VoicePresets.ALL.size - 1, gemini.size)
+        assertTrue(v.drop(1).none { VoicePresets.of(it.voice) == charon })
+        assertEquals(3, v.count { it.voice.gemini == null })
+        assertTrue(v.all { it.speaker == null })
+        // Every choice keeps this line's tone; a named voice brings its own description.
         assertTrue(v.all { it.voice.emotion == "excited" })
-        assertEquals("deep voice", v.first().voice.description)
+        val leda = v.first { it.voice.gemini == "Leda" }
+        assertEquals(VoicePresets.byId("leda").description, leda.voice.description)
+        assertEquals(Gender.FEMALE, leda.voice.gender)
+
+        // Lines in one voice share a key; another voice or the phone has another.
+        assertEquals(RedubChoices.voiceKey(RedubChoices.voiceOf(man)), RedubChoices.voiceKey(RedubChoices.voiceOf(man.copy(text = "ừ", emotion = ""))))
+        assertTrue(RedubChoices.voiceKey(RedubChoices.voiceOf(man)) != RedubChoices.voiceKey(RedubChoices.voiceOf(woman)))
+        val phone = DubInfo("content://a", 0, 10, phoneVoice = "vi-vn-x")
+        assertTrue(RedubChoices.voiceKey(RedubChoices.voiceOf(phone)) != RedubChoices.voiceKey(RedubChoices.voiceOf(woman)))
 
         val around = RedubChoices.around(p, p.audios[1])
-        assertEquals("Trước: Nam 1: hi → chào\nSau: Nam 1: hi → ừ", around)
+        assertEquals("Trước: hi → chào\nSau: hi → ừ", around)
+    }
+
+    @Test
+    fun olderLinesWithAPersonKeepTheirLabelWhenTheirVoiceIsKept() {
+        val man = DubInfo("content://a", 2000, 3000, "hi", "chào", "ENGLISH", "Nam 1", "Charon", "MALE", "deep voice", "excited")
+        val t1 = dub(1000, "Nam 1: chào", man)
+        val p = Project(name = "p", clips = listOf(a), audios = listOf(t1))
+        val v = RedubChoices.voices(p, t1)
+        assertEquals("Nam 1", v.first().speaker)
+        assertEquals("deep voice", v.first().voice.description)
+        // It is Charon, so Charon is not offered a second time.
+        assertTrue(v.drop(1).none { it.voice.gemini == "Charon" && it.voice.gender == Gender.MALE })
     }
 
     @Test

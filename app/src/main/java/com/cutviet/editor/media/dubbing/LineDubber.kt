@@ -32,7 +32,7 @@ class LineDubber(private val context: Context, private val workDir: File, privat
         val around: String,
         val voice: LineVoice,
         val phoneVoice: String?,
-        /** Label of the person ("Nam 1"), kept in the track's name. */
+        /** Label of the person ("Nam 1") on lines from older dubs, kept in the track's name; null for new ones. */
         val speaker: String?,
     )
 
@@ -105,8 +105,10 @@ class LineDubber(private val context: Context, private val workDir: File, privat
                 ?: throw StepUnavailableException("Giọng đọc của máy không đọc được câu này")
             progress(Step.SPEAK, 1f)
             // Longer than its time: played faster, up to the user's limit (TTS rate included).
+            // Shorter than its sentence: a little slower, so it lasts as long as the mouth moves.
             val maxPlayback = maxOf(1f, s.maxDubSpeed / spoken.rate)
-            val playback = if (spoken.ms > room + DubTime.TOLERANCE_MS) (spoken.ms.toFloat() / room).coerceIn(1f, maxPlayback) else 1f
+            val playback = if (spoken.ms > room + DubTime.TOLERANCE_MS) (spoken.ms.toFloat() / room).coerceIn(1f, maxPlayback)
+            else DubTime.fill(spoken.ms, spoken.rate, slot)
             val gain = Loudness.gainTo(DubbingPipeline.TARGET_LUFS, listOf(spoken.file))
             DubLog.i(TAG, "line done: \"${text.take(60)}\" ${spoken.ms}ms at rate ${spoken.rate}, played x${"%.2f".format(playback)}, room ${room}ms, ${if (phone) "phone" else r.voice.gemini}")
             return Output(
@@ -140,15 +142,11 @@ class LineDubber(private val context: Context, private val workDir: File, privat
                 progress(Step.LISTEN, 0f)
                 val voice = decode16k(audio)
                 val range = SpeechDetector.Range(r.startMs - from, (r.endMs - from).coerceAtMost(voice.size / 16L))
-                val heard = GeminiSubtitler(api, DubSettings(context).geminiTextModel)
-                    .listen(voice, listOf(range), r.language, r.around) { progress(Step.LISTEN, it) }
-                val turns = heard.turns.filter { it.vi.isNotBlank() }
-                if (turns.isEmpty()) throw OnlineUnavailableException("Gemini không nghe ra lời nói ở câu này")
-                if (turns.map { it.speaker }.distinct().size > 1) DubLog.i(TAG, "${turns.size} turns of several people in one line, read in one voice")
-                return Heard(
-                    turns.joinToString(" ") { it.vi.trim() }, turns.joinToString(" ") { it.source.trim() },
-                    turns.firstOrNull { it.emotion.isNotEmpty() }?.emotion.orEmpty(), true,
-                )
+                // Asked like a line of a full dub: what is said in this sentence alone, about as long as it.
+                val heard = GeminiDubber.listen(api, DubSettings(context).geminiTextModel, voice, listOf(range), r.language, r.around) {
+                    progress(Step.LISTEN, it)
+                }.firstOrNull()?.takeIf { it.text.isNotBlank() } ?: throw OnlineUnavailableException("Gemini không nghe ra lời nói ở câu này")
+                return Heard(heard.text, heard.source, heard.emotion, true)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -171,7 +169,7 @@ class LineDubber(private val context: Context, private val workDir: File, privat
 
     private suspend fun geminiVoice(api: GeminiApi, model: String, text: String, v: LineVoice): Spoken {
         val gender = v.gender ?: Gender.FEMALE
-        val role = GeminiDubber.Role(null, v.gemini!!, gender, v.description)
+        val role = GeminiDubber.Role(v.gemini!!, gender, v.description)
         val f = File(workDir, "line_gemini.wav")
         val answer = api.interact(GeminiDubber.ttsRequest(model, GeminiDubber.ttsPrompt(role, v.emotion, text), role.voice), "đọc lại câu")
         val (bytes, mime) = GeminiApi.outputAudio(answer) ?: throw OnlineUnavailableException("Gemini không trả về giọng đọc")

@@ -69,7 +69,7 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
             )
             var lastStep: DubbingPipeline.Step? = null
             var lastPercent = -1
-            val settings = DubbingPipeline.Settings(language, inputData.getString(KEY_VOICE), distinguish = DubSettings(applicationContext).distinguishSpeakers)
+            val settings = DubbingPipeline.Settings(language, inputData.getString(KEY_VOICE))
             val out = pipeline.run(source, sourceStart, sourceEnd, settings) { step, p ->
                 // Only report whole-percent changes: the system drops notifications sent too often.
                 val percent = (p * 100).toInt()
@@ -105,7 +105,6 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                 workDataOf(
                     KEY_COUNT to out.segments.size, KEY_SEPARATED to (out.stems != null),
                     KEY_ONLINE to out.usedOnline, KEY_FALLBACK to out.fallbackReason, KEY_NOTE to out.notice,
-                    KEY_SPEAKERS to out.segments.mapNotNull { it.speaker }.distinct().size,
                     KEY_SLOWED to slowdowns.size,
                 ),
             )
@@ -192,8 +191,6 @@ class DubbingWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         const val KEY_FALLBACK = "fallback"
         /** Progress: set once the online branch gave up and offline is running. Result: notice for the user. */
         const val KEY_NOTE = "note"
-        /** Result: how many distinct voices the dub uses (0 when speakers were not told apart). */
-        const val KEY_SPEAKERS = "speakers"
         /** Result: how many stretches of video play slower so long lines fit. */
         const val KEY_SLOWED = "slowed"
         private const val CHANNEL = "dubbing"
@@ -326,7 +323,7 @@ object Engines {
             return null
         }
         fun dubber(simulate: Boolean = false): OnlineDubber = when (s.onlineEngine) {
-            OnlineEngine.NATURAL -> GeminiDubber(GeminiApi(s.geminiKey, simulate), s.geminiTextModel, s.geminiTtsModel, workDir, s.distinguishSpeakers)
+            OnlineEngine.NATURAL -> GeminiDubber(GeminiApi(s.geminiKey, simulate), s.geminiTextModel, s.geminiTtsModel, workDir, VoicePresets.byId(s.geminiVoice))
             OnlineEngine.LIVE -> GeminiLiveTranslator(s.geminiKey, s.geminiModel, workDir, simulate)
         }
         if (s.simulateQuota && s.mode != DubMode.OFFLINE) return dubber(simulate = true)
