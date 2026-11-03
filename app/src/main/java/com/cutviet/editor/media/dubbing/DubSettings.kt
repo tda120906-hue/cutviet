@@ -43,6 +43,11 @@ class DubSettings(context: Context) {
         get() = VoicePresets.byId(prefs.getString("gemini_voice", null)).id
         set(v) = prefs.edit().putString("gemini_voice", v).apply()
 
+    /** Language picked last in the dub and subtitle dialogs (one of [SourceLanguage.CHOICES]). */
+    var sourceLanguage: SourceLanguage
+        get() = SourceLanguage.choiceOf(prefs.getString("source_language", null))
+        set(v) = prefs.edit().putString("source_language", v.name).apply()
+
     /** Test switch: the online branch acts as if Gemini answered 429, to check the offline fallback. */
     var simulateQuota: Boolean
         get() = prefs.getBoolean("simulate_429", false)

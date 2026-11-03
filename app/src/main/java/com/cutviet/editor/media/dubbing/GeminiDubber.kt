@@ -280,12 +280,15 @@ class GeminiDubber(
         private fun seconds(ms: Long): String = "${ms / 1000}.${(ms % 1000) / 100}"
 
         fun listenPrompt(language: SourceLanguage, count: Int, context: String = ""): String = buildString {
-            val lang = language.label.lowercase()
-            append("Dưới đây là $count đoạn ghi âm lời nói $lang trong một video, đúng thứ tự thời gian. Mỗi đoạn có nhãn [S<số>] kèm độ dài của đoạn. ")
+            val lang = language.promptName
+            append("Dưới đây là $count đoạn ghi âm lời nói${lang?.let { " $it" } ?: ""} trong một video, đúng thứ tự thời gian. Mỗi đoạn có nhãn [S<số>] kèm độ dài của đoạn. ")
+            if (lang == null) append(GeminiSubtitler.AUTO_LANGUAGE)
             append("Mỗi đoạn là một câu (đôi khi chỉ một phần câu); lời lồng tiếng Việt của đoạn nào sẽ được đọc đè lên đúng khoảng thời gian của đoạn đó trong video.\n")
             append("Với mỗi đoạn trả về:\n")
-            append("- source: nguyên văn lời nói $lang nghe được trong đoạn đó, chỉ trong đoạn đó.\n")
-            append("- vi: lời lồng tiếng Việt của riêng đoạn đó: dịch tự nhiên như người Việt nói, đúng sắc thái, xưng hô hợp ngữ cảnh (anh, chị, em, tôi, mình…), giữ nguyên tên riêng, không dịch từng chữ. ")
+            append("- source: nguyên văn lời nói${lang?.let { " $it" } ?: ""} nghe được trong đoạn đó, chỉ trong đoạn đó${if (lang == null) ", viết bằng chính ngôn ngữ đó" else ""}.\n")
+            append("- vi: lời lồng tiếng Việt của riêng đoạn đó: ")
+            if (lang == null) append("đoạn nói tiếng Việt thì giữ đúng lời đó, viết đúng chính tả; đoạn nói tiếng khác thì ")
+            append("dịch tự nhiên như người Việt nói, đúng sắc thái, xưng hô hợp ngữ cảnh (anh, chị, em, tôi, mình…), giữ nguyên tên riêng, không dịch từng chữ. ")
             append("Câu bị cắt ngang qua hai đoạn thì mỗi đoạn chỉ dịch phần của mình, sao cho đọc nối tiếp vẫn tự nhiên. ")
             append("Dài khoảng số âm tiết ghi ở nhãn để đọc vừa khít thời gian của đoạn: không dài hơn nhiều, cũng không ngắn hơn nhiều.\n")
             append("- emotion: giọng điệu bằng vài từ tiếng Anh, ví dụ neutral, excited, laughing, annoyed, sad, whispering, shouting.\n")
@@ -397,7 +400,7 @@ class GeminiDubber(
 
         fun shortenRequest(model: String, language: SourceLanguage, lines: List<Heard>, targets: Map<Int, Int>, schema: Boolean): JSONObject {
             val prompt = buildString {
-                append("Các câu lồng tiếng sau dài hơn thời gian của câu ${language.label.lowercase()} gốc. ")
+                append("Các câu lồng tiếng sau dài hơn thời gian của câu${language.promptName?.let { " $it" } ?: ""} gốc. ")
                 append("Viết lại mỗi câu tiếng Việt cho ngắn hơn, không quá số âm tiết ghi kèm, giữ ý chính, giọng điệu và cách xưng hô, tự nhiên như người Việt nói.\n")
                 lines.forEach { l -> append("[${l.index + 1}] Gốc: ${l.source} | Đang dịch: ${l.text} | Tối đa ${targets[l.index]} âm tiết\n") }
                 append("Chỉ trả về JSON dạng {\"lines\":[{\"index\":1,\"vi\":\"…\"}]}.")

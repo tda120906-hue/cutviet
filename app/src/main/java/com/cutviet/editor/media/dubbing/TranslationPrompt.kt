@@ -14,6 +14,9 @@ object TranslationPrompt {
     const val WINDOW = 8
     const val CONTEXT = 3
 
+    /** "từ tiếng anh " before "sang tiếng Việt"; nothing when the language was not found. */
+    private fun from(language: SourceLanguage): String = language.promptName?.let { "từ $it " } ?: ""
+
     /**
      * Most syllables the Vietnamese line may have to be spoken in [roomMs] at up to 1.1x, for a
      * voice that speaks [syllablesPerSecond] at rate 1.0.
@@ -28,7 +31,7 @@ object TranslationPrompt {
         lines: List<SpeechSegment>,
         budgets: List<Int> = lines.map { syllableBudget(it.slotMs) },
     ): String = buildString {
-        append("Dịch các câu thoại sau từ ${language.label.lowercase()} sang tiếng Việt tự nhiên, giữ đúng sắc thái, ")
+        append("Dịch các câu thoại sau ${from(language)}sang tiếng Việt tự nhiên, giữ đúng sắc thái, ")
         append("giọng điệu và cách xưng hô phù hợp ngữ cảnh. Không dịch từng chữ. ")
         append("Đây là lời thoại để lồng tiếng, nên mỗi câu dịch không được dài hơn số âm tiết ghi trong ngoặc vuông. ")
         append("Trả về đúng ${lines.size} dòng, mỗi dòng dạng \"số. bản dịch\", không giải thích gì thêm.\n")
@@ -45,7 +48,7 @@ object TranslationPrompt {
 
     /** Translation for subtitles: natural and short enough to read, no syllable limits. */
     fun buildSubtitles(language: SourceLanguage, context: List<SpeechSegment>, lines: List<SpeechSegment>): String = buildString {
-        append("Dịch các câu thoại sau từ ${language.label.lowercase()} sang tiếng Việt để làm phụ đề phim. ")
+        append("Dịch các câu thoại sau ${from(language)}sang tiếng Việt để làm phụ đề phim. ")
         append("Dịch tự nhiên như người Việt nói, đúng sắc thái và cách xưng hô theo ngữ cảnh, gọn để người xem đọc kịp, ")
         append("giữ nguyên tên riêng, không dịch từng chữ. ")
         append("Trả về đúng ${lines.size} dòng, mỗi dòng dạng \"số. bản dịch\", không giải thích gì thêm.\n")
@@ -62,7 +65,7 @@ object TranslationPrompt {
         append("Câu lồng tiếng tiếng Việt dưới đây quá dài so với thời gian nói. ")
         append("Hãy viết lại ngắn hơn, tối đa $maxSyllables âm tiết, giữ ý chính và giọng điệu tự nhiên, ")
         append("có thể bỏ từ đệm hoặc ý phụ. Chỉ trả về câu đã rút gọn, không giải thích.\n")
-        append("Câu gốc (${language.label.lowercase()}): ").append(source.trim()).append('\n')
+        append("Câu gốc" + (language.promptName?.let { " ($it)" } ?: "") + ": ").append(source.trim()).append('\n')
         append("Bản dịch hiện tại: ").append(current.trim()).append('\n')
     }
 

@@ -2,6 +2,7 @@
 #include <jni.h>
 #include <android/log.h>
 
+#include <algorithm>
 #include <atomic>
 #include <fstream>
 #include <string>
@@ -172,4 +173,53 @@ Java_com_cutviet_editor_media_dubbing_WhisperNative_transcribe(
     }
     json += "]}";
     return env->NewStringUTF(json.c_str());
+}
+
+/**
+ * Finds the language spoken in a raw float32, mono, 16 kHz PCM file from 30 s windows starting at
+ * [offsetsMs] (where someone speaks): the language probabilities are added up over the windows, so
+ * one window of music or silence cannot decide alone. Returns "code probability" ("ja 0.93"), or
+ * null when no window could be read.
+ */
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_cutviet_editor_media_dubbing_WhisperNative_detectLanguage(
+        JNIEnv *env, jobject, jlong handle, jstring pcmPath, jlongArray offsetsMs, jint threads) {
+    auto *h = reinterpret_cast<Handle *>(handle);
+    if (!h || !h->ctx) return nullptr;
+
+    std::vector<float> pcm;
+    {
+        const char *p = env->GetStringUTFChars(pcmPath, nullptr);
+        const bool ok = readPcm(p, pcm);
+        env->ReleaseStringUTFChars(pcmPath, p);
+        if (!ok) {
+            LOGE("cannot read pcm");
+            return nullptr;
+        }
+    }
+    const jsize count = env->GetArrayLength(offsetsMs);
+    std::vector<jlong> offsets(static_cast<size_t>(count));
+    env->GetLongArrayRegion(offsetsMs, 0, count, offsets.data());
+
+    const int languages = whisper_lang_max_id() + 1;
+    std::vector<float> sum(static_cast<size_t>(languages), 0.0f);
+    std::vector<float> probs(static_cast<size_t>(languages), 0.0f);
+    const size_t window = static_cast<size_t>(30) * WHISPER_SAMPLE_RATE;
+    int used = 0;
+    for (const jlong off : offsets) {
+        if (h->abort.load()) return nullptr;
+        const size_t from = static_cast<size_t>(std::max<jlong>(0, off)) * WHISPER_SAMPLE_RATE / 1000;
+        if (from >= pcm.size()) continue;
+        const size_t n = std::min(window, pcm.size() - from);
+        if (n < static_cast<size_t>(WHISPER_SAMPLE_RATE)) continue;  // under a second
+        if (whisper_pcm_to_mel(h->ctx, pcm.data() + from, static_cast<int>(n), threads) != 0) continue;
+        if (whisper_lang_auto_detect(h->ctx, 0, threads, probs.data()) < 0) continue;
+        for (int i = 0; i < languages; ++i) sum[static_cast<size_t>(i)] += probs[static_cast<size_t>(i)];
+        ++used;
+    }
+    if (used == 0) return nullptr;
+    const int best = static_cast<int>(std::max_element(sum.begin(), sum.end()) - sum.begin());
+    const std::string out = std::string(whisper_lang_str(best)) + " " + std::to_string(sum[static_cast<size_t>(best)] / used);
+    LOGI("language %s from %d windows", out.c_str(), used);
+    return env->NewStringUTF(out.c_str());
 }

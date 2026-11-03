@@ -2,16 +2,56 @@ package com.cutviet.editor.media.dubbing
 
 import java.io.File
 
-/** Language spoken in the source video. Fixed by the user so Whisper never guesses wrong. */
+/**
+ * Language spoken in the source video. The user picks English, Chinese or "Tự phát hiện" ([CHOICES]);
+ * with [AUTO] Gemini or Whisper finds the language by listening. The other entries are what Whisper
+ * can report, so its sentences are recognised and translated as that language.
+ */
 enum class SourceLanguage(val code: String, val label: String, val initialPrompt: String?) {
     ENGLISH("en", "Tiếng Anh", null),
     CHINESE("zh", "Tiếng Trung", "以下是普通话的句子。"),
-    /** Subtitles only: the words are written down as they are said. */
+    /** Found by listening: any language, also Vietnamese (then written down as said, not translated). */
+    AUTO("auto", "Tự phát hiện", null),
+    /** Vietnamese speech: written down as said. */
     VIETNAMESE("vi", "Tiếng Việt", "Xin chào các bạn. Hôm nay, chúng ta sẽ nói về một chủ đề rất thú vị."),
+    JAPANESE("ja", "Tiếng Nhật", null),
+    KOREAN("ko", "Tiếng Hàn", null),
+    THAI("th", "Tiếng Thái", null),
+    CANTONESE("yue", "Tiếng Quảng Đông", null),
+    INDONESIAN("id", "Tiếng Indonesia", null),
+    MALAY("ms", "Tiếng Mã Lai", null),
+    FILIPINO("tl", "Tiếng Philippines", null),
+    KHMER("km", "Tiếng Khmer", null),
+    LAO("lo", "Tiếng Lào", null),
+    HINDI("hi", "Tiếng Hindi", null),
+    FRENCH("fr", "Tiếng Pháp", null),
+    GERMAN("de", "Tiếng Đức", null),
+    SPANISH("es", "Tiếng Tây Ban Nha", null),
+    PORTUGUESE("pt", "Tiếng Bồ Đào Nha", null),
+    ITALIAN("it", "Tiếng Ý", null),
+    RUSSIAN("ru", "Tiếng Nga", null),
+    ARABIC("ar", "Tiếng Ả Rập", null),
+    TURKISH("tr", "Tiếng Thổ Nhĩ Kỳ", null),
     ;
 
-    /** Whether a dub into Vietnamese makes sense (not for Vietnamese speech). */
-    val dubbable: Boolean get() = this != VIETNAMESE
+    /** "tiếng anh" as the prompts write it; null for [AUTO], whose language is not known yet. */
+    val promptName: String? get() = if (this == AUTO) null else label.lowercase()
+
+    companion object {
+        /** What the user picks from, in the dub, the line editor and the subtitles. */
+        val CHOICES: List<SourceLanguage> = listOf(ENGLISH, CHINESE, AUTO)
+
+        /** The language Whisper reported as [code] ("ja"), or null for one not listed here. */
+        fun ofCode(code: String?): SourceLanguage? = entries.firstOrNull { it != AUTO && it.code == code }
+
+        /** [chosen], or with [AUTO] what was heard ([heardCode]) when it is a listed language. */
+        fun resolve(chosen: SourceLanguage, heardCode: String?): SourceLanguage =
+            if (chosen != AUTO) chosen else ofCode(heardCode) ?: AUTO
+
+        /** One of [CHOICES] for a saved language name: English and Chinese stay, anything else is found again. */
+        fun choiceOf(name: String?): SourceLanguage =
+            entries.firstOrNull { it.name == name }?.takeIf { it in CHOICES } ?: AUTO
+    }
 }
 
 /** Which translation branch to use. */
@@ -112,7 +152,11 @@ data class AudioSource(val uri: String, val startMs: Long, val endMs: Long, val 
 
 /** Speech to text with segment timestamps. */
 interface SpeechToText {
+    /** [language] [SourceLanguage.AUTO]: the language is found first, and told by [heardLanguage]. */
     suspend fun transcribe(source: AudioSource, language: SourceLanguage, progress: (Float) -> Unit): List<SpeechSegment>
+
+    /** Code of the language the last [transcribe] heard ("ja"), or null when it was not detected. */
+    val heardLanguage: String? get() = null
 }
 
 /**
