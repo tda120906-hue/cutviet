@@ -74,7 +74,7 @@ import kotlin.math.roundToInt
 fun SubtitleDialog(vm: EditorViewModel, onDismiss: () -> Unit, onOpenModels: () -> Unit) {
     val context = LocalContext.current
     val settings = remember { DubSettings(context) }
-    var language by remember { mutableStateOf(SourceLanguage.ENGLISH) }
+    var language by remember { mutableStateOf(settings.sourceLanguage) }
     var mode by remember { mutableStateOf(settings.mode) }
     val separationReady = remember { DubModel.MDX_VOC_FT.isReady(context) }
     var separate by remember { mutableStateOf(separationReady) }
@@ -93,9 +93,13 @@ fun SubtitleDialog(vm: EditorViewModel, onDismiss: () -> Unit, onOpenModels: () 
                 )
 
                 Label("Ngôn ngữ trong video")
-                Chips(SourceLanguage.entries, language, { it.label }) { language = it }
-                if (language == SourceLanguage.VIETNAMESE) {
-                    Text("Video nói tiếng Việt: phụ đề là chính lời nói đó, chép lại có dấu câu.", color = TextDim, fontSize = 12.sp)
+                Chips(SourceLanguage.CHOICES, language, { it.label }) { language = it; settings.sourceLanguage = it }
+                if (language == SourceLanguage.AUTO) {
+                    Text(
+                        "Nghe để biết video nói tiếng gì (Nhật, Hàn, Thái, Pháp…, cả khi xen nhiều tiếng) rồi dịch sang tiếng Việt. " +
+                            "Video nói tiếng Việt thì phụ đề là chính lời nói đó, chép lại có dấu câu.",
+                        color = TextDim, fontSize = 12.sp,
+                    )
                 }
 
                 Label("Cách làm")
@@ -104,7 +108,7 @@ fun SubtitleDialog(vm: EditorViewModel, onDismiss: () -> Unit, onOpenModels: () 
                     when (mode) {
                         DubMode.AUTO -> "Online (Gemini) khi có Wi-Fi hoặc khi chưa có model offline; lỗi mạng hay hết lượt thì tự chuyển offline."
                         DubMode.ONLINE_FIRST -> "Luôn thử Gemini trước khi có mạng; lỗi thì chuyển offline."
-                        DubMode.OFFLINE -> "Chỉ dùng Whisper" + (if (language == SourceLanguage.VIETNAMESE) "" else " + Gemma") + " trên máy, không cần mạng."
+                        DubMode.OFFLINE -> "Chỉ dùng Whisper + Gemma trên máy, không cần mạng."
                     },
                     color = TextDim, fontSize = 12.sp,
                 )
@@ -126,7 +130,7 @@ fun SubtitleDialog(vm: EditorViewModel, onDismiss: () -> Unit, onOpenModels: () 
                 val missing = buildList {
                     if (mode == DubMode.OFFLINE || settings.geminiKey.isBlank()) {
                         if (!DubModel.WHISPER_LARGE_V3.isReady(context)) add(DubModel.WHISPER_LARGE_V3)
-                        if (language != SourceLanguage.VIETNAMESE && !DubModel.GEMMA_3N_E4B.isReady(context)) add(DubModel.GEMMA_3N_E4B)
+                        if (!DubModel.GEMMA_3N_E4B.isReady(context)) add(DubModel.GEMMA_3N_E4B)
                     }
                 }
                 if (missing.isNotEmpty()) {

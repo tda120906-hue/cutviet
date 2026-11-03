@@ -156,13 +156,17 @@ class LineDubber(private val context: Context, private val workDir: File, privat
             }
         }
         progress(Step.LISTEN, 0f)
-        val segments = Engines.speechToText(context, workDir).transcribe(audio, r.language) { progress(Step.LISTEN, it) }
+        val asr = Engines.speechToText(context, workDir)
+        val segments = asr.transcribe(audio, r.language) { progress(Step.LISTEN, it) }
             .filter { it.text.isNotBlank() && !com.cutviet.editor.model.SubtitleCues.isHallucination(it.text) }
         if (segments.isEmpty()) throw StepUnavailableException("Không nghe ra lời nói nào ở câu này")
         val line = SpeechSegment(segments.first().startMs, segments.last().endMs, segments.joinToString(" ") { it.text.trim() })
+        // "Tự phát hiện": Vietnamese speech is kept as said, anything else translated.
+        val lang = SourceLanguage.resolve(r.language, asr.heardLanguage)
+        if (lang == SourceLanguage.VIETNAMESE) return Heard(line.text, line.text, "", false)
         progress(Step.TRANSLATE, 0f)
         val vi = Engines.translator(context).use { t ->
-            t.translate(listOf(line), r.language, listOf(TranslationPrompt.syllableBudget(r.roomMs))) { progress(Step.TRANSLATE, it) }
+            t.translate(listOf(line), lang, listOf(TranslationPrompt.syllableBudget(r.roomMs))) { progress(Step.TRANSLATE, it) }
         }.firstOrNull().orEmpty().trim()
         return Heard(vi, line.text, "", false)
     }

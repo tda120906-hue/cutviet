@@ -71,6 +71,9 @@ class GeminiSubtitler(private val api: GeminiApi, private val model: String) {
         /** Shortest turn kept apart; anything shorter joins the turn before it. */
         const val MIN_TURN_MS = 400L
 
+        /** Said in a listening prompt when the user let the language be found. */
+        const val AUTO_LANGUAGE = "Chưa biết video nói tiếng gì: hãy tự nhận ra ngôn ngữ của từng câu (tiếng Anh, tiếng Trung, tiếng Việt hay bất kỳ tiếng nào khác, có khi xen nhiều tiếng). "
+
         /**
          * Places a segment's turns in time. The model's start times are seconds into the segment's
          * audio (which begins [PAD_MS] early); when they are missing or out of order the segment is
@@ -138,18 +141,25 @@ class GeminiSubtitler(private val api: GeminiApi, private val model: String) {
         }
 
         fun prompt(language: SourceLanguage, count: Int, known: List<GeminiDubber.Speaker> = emptyList(), context: String = ""): String = buildString {
-            val lang = language.label.lowercase()
-            append("Dưới đây là $count đoạn ghi âm lời nói $lang trong một video, đúng thứ tự thời gian, mỗi đoạn có nhãn [S<số>]. ")
+            val lang = language.promptName
+            if (lang != null) {
+                append("Dưới đây là $count đoạn ghi âm lời nói $lang trong một video, đúng thứ tự thời gian, mỗi đoạn có nhãn [S<số>]. ")
+            } else {
+                append("Dưới đây là $count đoạn ghi âm lời nói trong một video, đúng thứ tự thời gian, mỗi đoạn có nhãn [S<số>]. ")
+                append(AUTO_LANGUAGE)
+            }
             append("Làm phụ đề tiếng Việt cho video.\n")
             append("Trong mỗi đoạn có thể có một hoặc nhiều người nói nối tiếp nhau. Tách đoạn thành các lượt nói (turns): mỗi khi người nói đổi là một lượt mới.\n")
             append("Với mỗi lượt nói:\n")
             append("- speaker: mã người nói. Cùng một người trong cả video thì dùng cùng một mã (A, B, C…). Phân biệt bằng giọng nghe được (cao độ, âm sắc, cách nói), không đoán theo nội dung.\n")
             append("- start: lượt nói bắt đầu ở giây thứ mấy tính từ đầu đoạn ghi âm đó (số thập phân, ví dụ 2.4).\n")
-            append("- source: nguyên văn lời nói $lang nghe được.\n")
-            if (language == SourceLanguage.VIETNAMESE) {
-                append("- vi: chính câu tiếng Việt đó, viết đúng chính tả, có dấu câu đầy đủ, không thêm hay bớt ý, bỏ tiếng ậm ừ vô nghĩa.\n")
-            } else {
-                append("- vi: phụ đề tiếng Việt, dịch tự nhiên như người Việt nói, đúng sắc thái, xưng hô hợp với người nói và người nghe (anh, chị, em, tôi, mình…), gọn để người xem đọc kịp, giữ nguyên tên riêng, không dịch từng chữ.\n")
+            append(if (lang != null) "- source: nguyên văn lời nói $lang nghe được.\n" else "- source: nguyên văn lời nói nghe được, viết bằng chính ngôn ngữ đó.\n")
+            val asSaid = "chính câu tiếng Việt đó, viết đúng chính tả, có dấu câu đầy đủ, không thêm hay bớt ý, bỏ tiếng ậm ừ vô nghĩa"
+            val translated = "phụ đề tiếng Việt, dịch tự nhiên như người Việt nói, đúng sắc thái, xưng hô hợp với người nói và người nghe (anh, chị, em, tôi, mình…), gọn để người xem đọc kịp, giữ nguyên tên riêng, không dịch từng chữ"
+            when (language) {
+                SourceLanguage.VIETNAMESE -> append("- vi: $asSaid.\n")
+                SourceLanguage.AUTO -> append("- vi: lượt nói tiếng Việt thì là $asSaid; lượt nói tiếng khác thì là $translated.\n")
+                else -> append("- vi: $translated.\n")
             }
             append("- emotion: giọng điệu bằng vài từ tiếng Anh, ví dụ neutral, excited, laughing, annoyed, sad, whispering, shouting.\n")
             append("Với mỗi người nói: gender theo giọng (male, female, hoặc child nếu là trẻ em) và voice: mô tả giọng bằng một câu tiếng Anh ngắn (tuổi ước chừng, giọng trầm hay cao, nói nhanh hay chậm, phong thái).\n")

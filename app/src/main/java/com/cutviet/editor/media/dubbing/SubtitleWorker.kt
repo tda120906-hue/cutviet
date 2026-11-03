@@ -52,7 +52,8 @@ class SubtitlePipeline(private val context: Context, private val workDir: File) 
     class Output(val cues: List<SubtitleCues.Cue>, val usedOnline: Boolean, val fallbackReason: String?)
 
     /** One sentence in a part's source time. */
-    private class Said(val part: Int, val startMs: Long, val endMs: Long, val source: String, var text: String)
+    /** [language]: what this line is in (with "Tự phát hiện", what Whisper heard in its clip). */
+    private class Said(val part: Int, val startMs: Long, val endMs: Long, val source: String, var text: String, val language: SourceLanguage)
 
     @Volatile
     var fallbackReason: String? = null
@@ -132,7 +133,7 @@ class SubtitlePipeline(private val context: Context, private val workDir: File) 
             // Each person's turn is its own line, also when two people speak without a pause.
             val heard = timed("gemini $i") { online.listen(voice, ranges, language) { at(0.1f + 0.9f * it) } }
             heard.turns.filter { !SubtitleCues.isHallucination(it.vi) }.forEach { t ->
-                out += Said(i, t.startMs + src.offsetMs, t.endMs + src.offsetMs, t.source, t.vi)
+                out += Said(i, t.startMs + src.offsetMs, t.endMs + src.offsetMs, t.source, t.vi, language)
             }
         }
         if (out.isEmpty()) throw OnlineUnavailableException("Gemini không nghe ra câu nào")
@@ -147,22 +148,31 @@ class SubtitlePipeline(private val context: Context, private val workDir: File) 
             val segments = timed("whisper $i") {
                 asr.transcribe(src, language) { progress(Step.RECOGNIZE, (i + it) / sources.size) }
             }
+            val heard = SourceLanguage.resolve(language, asr.heardLanguage)
+            if (heard != language) DubLog.i(TAG, "clip $i: language heard $heard (${asr.heardLanguage})")
             segments.filter { it.text.isNotBlank() && it.slotMs > 0 && !SubtitleCues.isHallucination(it.text) }
-                .forEach { said += Said(i, it.startMs, it.endMs, it.text, it.text) }
+                .forEach { said += Said(i, it.startMs, it.endMs, it.text, it.text, heard) }
         }
         DubLog.i(TAG, "recognized ${said.size} sentences")
-        if (said.isEmpty() || language == SourceLanguage.VIETNAMESE) return said
+        // Vietnamese speech is written down as said; the rest is translated, language by language.
+        val foreign = said.filter { it.language != SourceLanguage.VIETNAMESE }
+        if (foreign.isEmpty()) return said
 
         val model = DubModel.GEMMA_3N_E4B
         if (!model.isReady(context)) throw StepUnavailableException("Chưa tải model dịch (${model.label})")
         val translator = GemmaTranslator(context, model.file(context), subtitles = true)
         try {
             progress(Step.TRANSLATE, 0f)
-            val segments = said.map { SpeechSegment(it.startMs, it.endMs, it.source) }
-            val texts = timed("gemma") {
-                translator.translate(segments, language, segments.map { 0 }) { progress(Step.TRANSLATE, it) }
+            val groups = foreign.groupBy { it.language }.values.toList()
+            groups.forEachIndexed { g, group ->
+                val segments = group.map { SpeechSegment(it.startMs, it.endMs, it.source) }
+                val texts = timed("gemma ${group.first().language}") {
+                    translator.translate(segments, group.first().language, segments.map { 0 }) {
+                        progress(Step.TRANSLATE, (g + it) / groups.size)
+                    }
+                }
+                texts.forEachIndexed { k, t -> if (k < group.size && t.isNotBlank()) group[k].text = t.trim() }
             }
-            texts.forEachIndexed { k, t -> if (k < said.size && t.isNotBlank()) said[k].text = t.trim() }
         } finally {
             translator.close()
         }

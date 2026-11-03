@@ -114,7 +114,7 @@ fun DubbingDialog(vm: EditorViewModel, onDismiss: () -> Unit, initialTab: Int = 
 @Composable
 private fun DubTab(vm: EditorViewModel, settings: DubSettings, onOpenModels: () -> Unit, onStarted: () -> Unit) {
     val context = LocalContext.current
-    var language by remember { mutableStateOf(SourceLanguage.ENGLISH) }
+    var language by remember { mutableStateOf(settings.sourceLanguage) }
     var mode by remember { mutableStateOf(settings.mode) }
     var engine by remember { mutableStateOf(settings.onlineEngine) }
     var preset by remember { mutableStateOf(VoicePresets.byId(settings.geminiVoice)) }
@@ -133,7 +133,10 @@ private fun DubTab(vm: EditorViewModel, settings: DubSettings, onOpenModels: () 
     )
 
     Label("Ngôn ngữ trong video")
-    Chips(SourceLanguage.entries.filter { it.dubbable }, language, { it.label }) { language = it }
+    Chips(SourceLanguage.CHOICES, language, { it.label }) { language = it; settings.sourceLanguage = it }
+    if (language == SourceLanguage.AUTO) {
+        Text("Nghe để biết video nói tiếng gì (Nhật, Hàn, Thái, Pháp…, cả khi xen nhiều tiếng) rồi dịch sang tiếng Việt. Câu nào đã là tiếng Việt thì giữ nguyên lời.", color = TextDim, fontSize = 12.sp)
+    }
 
     Label("Cách dịch")
     Chips(DubMode.entries, mode, { it.label }) { mode = it; settings.mode = it }

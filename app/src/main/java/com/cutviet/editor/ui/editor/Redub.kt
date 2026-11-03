@@ -66,7 +66,7 @@ fun RedubDialog(vm: EditorViewModel, trackId: String, onDismiss: () -> Unit) {
     val sameVoice = remember(trackId) { vm.sameVoiceLines(track).size }
     var allSameVoice by remember(trackId) { mutableStateOf(false) }
     var language by remember(trackId) {
-        mutableStateOf(runCatching { SourceLanguage.valueOf(info.language) }.getOrNull()?.takeIf { it.dubbable } ?: SourceLanguage.ENGLISH)
+        mutableStateOf(SourceLanguage.choiceOf(info.language.ifBlank { null }))
     }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(Modifier.fillMaxSize().background(Color(0xFF101014))) {
@@ -89,7 +89,7 @@ fun RedubDialog(vm: EditorViewModel, trackId: String, onDismiss: () -> Unit) {
                 OutlinedTextField(value = text, onValueChange = { text = it }, modifier = Modifier.fillMaxWidth(), minLines = 2)
 
                 Label("Ngôn ngữ trong video")
-                Chips(SourceLanguage.entries.filter { it.dubbable }, language, { it.label }) { language = it }
+                Chips(SourceLanguage.CHOICES, language, { it.label }) { language = it }
 
                 Label("Giọng đọc")
                 VoiceChoiceList(choices, choice) { choice = it }
@@ -155,7 +155,7 @@ fun VoicePickerDialog(vm: EditorViewModel, trackId: String, onDismiss: () -> Uni
     var choice by remember(trackId) { mutableStateOf(choices.first()) }
     val sameVoice = remember(trackId) { vm.sameVoiceLines(track).size }
     var allSameVoice by remember(trackId) { mutableStateOf(false) }
-    val language = runCatching { SourceLanguage.valueOf(info.language) }.getOrNull()?.takeIf { it.dubbable } ?: SourceLanguage.ENGLISH
+    val language = SourceLanguage.choiceOf(info.language.ifBlank { null })
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Đổi giọng câu này") },

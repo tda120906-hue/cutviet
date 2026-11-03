@@ -84,6 +84,10 @@ class DubbingPipeline(
         val segments = SpeechDetector.tighten(heard, speechIn(source))
         DubLog.i(TAG, "recognized ${segments.size} sentences, ${segments.indices.count { segments[it] != heard[it] }} trimmed to the voice")
         if (segments.isEmpty()) return Output(emptyList(), stems, 1f, false, fallback)
+        // "Tự phát hiện": what Whisper heard. Vietnamese speech is read as it was said.
+        val lang = SourceLanguage.resolve(settings.language, asr.heardLanguage)
+        if (lang != settings.language) DubLog.i(TAG, "language heard: $lang (${asr.heardLanguage})")
+        val heardSettings = settings.copy(language = lang)
 
         // Each line may use the silence after its sentence; the translation is asked to fit that
         // time at this voice's real speed.
@@ -91,15 +95,15 @@ class DubbingPipeline(
         val speed = voiceSpeed(settings)
         val budgets = segments.indices.map { TranslationPrompt.syllableBudget(room[it], speed) }
         val dubbed = try {
-            val texts = timed(Step.TRANSLATE, progress) {
-                translator.translate(segments, settings.language, budgets) { progress(Step.TRANSLATE, it) }
+            val texts = if (lang == SourceLanguage.VIETNAMESE) segments.map { it.text } else timed(Step.TRANSLATE, progress) {
+                translator.translate(segments, lang, budgets) { progress(Step.TRANSLATE, it) }
             }
             require(texts.size == segments.size) { "translator returned ${texts.size} of ${segments.size} lines" }
             timed(Step.SPEAK, progress) {
                 val out = ArrayList<DubbedSegment>()
                 segments.forEachIndexed { i, seg ->
                     progress(Step.SPEAK, i.toFloat() / segments.size)
-                    speak(i, seg, texts[i].trim(), room[i], settings)
+                    speak(i, seg, texts[i].trim(), room[i], heardSettings)
                         ?.copy(voice = LineVoice(null, null, pitch = settings.pitch))?.let(out::add)
                 }
                 out
