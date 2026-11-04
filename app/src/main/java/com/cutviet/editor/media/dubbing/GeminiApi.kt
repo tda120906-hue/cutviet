@@ -21,7 +21,9 @@ import kotlin.coroutines.resumeWithException
 /**
  * Minimal client for the Gemini API's Interactions endpoint (POST /v1beta/interactions), used by
  * the natural online dub for listening (gemini-3.8-flash) and speaking (gemini-3.8-flash-tts).
- * Short rate limits are waited out; a used-up daily quota is reported as [QuotaException].
+ * Short rate limits are waited out; a used-up daily quota is reported as [QuotaException]. A model
+ * Google reports as overloaded (503) is tried twice more, then a lighter one ([fallbacksFor]) is used
+ * instead, also by later requests for a while ([OVERLOAD_MEMORY_MS]).
  */
 class GeminiApi(
     private val apiKey: String,
@@ -47,8 +49,12 @@ class GeminiApi(
             throw OnlineUnavailableException("Gemini báo hết hạn mức (429, giả lập)")
         }
         if (apiKey.isBlank()) throw OnlineUnavailableException("Chưa nhập khoá Gemini")
-        val payload = body.toString()
+        val asked = body.optString("model")
+        var model = stillReplaced(asked) ?: asked
+        val tried = mutableListOf(model)
+        var payload = body.put("model", model).toString()
         var attempt = 0
+        var overloaded = 0
         while (true) {
             val t0 = SystemClock.elapsedRealtime()
             val (code, text) = try {
@@ -69,7 +75,7 @@ class GeminiApi(
                     val err = json.optJSONArray("errors")?.optJSONObject(0)?.optString("message")
                     throw OnlineUnavailableException("Gemini báo lỗi ($what): ${err ?: "không rõ"}")
                 }
-                DubLog.i(TAG, "$what: $ms ms")
+                DubLog.i(TAG, "$what: $ms ms${if (model != asked) " ($model)" else ""}")
                 return json
             }
             val err = errorOf(text)
@@ -83,6 +89,23 @@ class GeminiApi(
                     continue
                 }
                 throw QuotaException("Gemini báo hết hạn mức (429) cho $what")
+            }
+            // Overloaded: a lighter model after two more tries, while the asked one stays busy.
+            // A replacement this key cannot use (404) is passed over the same way.
+            if ((code == 503 && ++overloaded > OVERLOAD_RETRIES) || (code == 404 && model != asked)) {
+                val next = nextModel(asked, tried)
+                if (next != null) {
+                    DubLog.w(TAG, "$what: $model ${if (code == 503) "overloaded (503)" else "not available (404)"}, using $next")
+                    model = next
+                    tried += next
+                    replaced[asked] = next to SystemClock.elapsedRealtime()
+                    payload = body.put("model", model).toString()
+                    attempt = 0
+                    overloaded = 0
+                    continue
+                }
+                DubLog.w(TAG, "$what: overloaded (503) on ${tried.joinToString()}, $code on $model")
+                throw OnlineUnavailableException("Máy chủ Gemini đang quá tải (503, lỗi phía Google) với ${tried.joinToString()} ($what)")
             }
             if (code >= 500 && attempt++ < MAX_RETRIES) {
                 DubLog.w(TAG, "$what: server error $code, retrying")
@@ -122,6 +145,10 @@ class GeminiApi(
         })
     }
 
+    /** "gemini-3.8-flash quá tải nên dùng gemini-3.5-flash" for the models swapped now, or null. */
+    val switchNote: String?
+        get() = replaced.keys.mapNotNull { a -> stillReplaced(a)?.let { "$a quá tải nên dùng $it" } }.joinToString("; ").ifEmpty { null }
+
     fun shutdown() {
         client.dispatcher.executorService.shutdown()
         client.connectionPool.evictAll()
@@ -133,6 +160,33 @@ class GeminiApi(
         const val TAG = "CutVietGemini"
         const val ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/interactions"
         private const val MAX_RETRIES = 4
+
+        /** Tries on an overloaded (503) model before a lighter one is used. */
+        private const val OVERLOAD_RETRIES = 2
+
+        /** How long later requests skip a model that was overloaded. */
+        const val OVERLOAD_MEMORY_MS = 30 * 60_000L
+
+        /** Lighter models to use when the one asked for is overloaded, best first. */
+        private val TEXT_FALLBACKS = listOf("gemini-3.5-flash", "gemini-3.5-flash-lite")
+        private val TTS_FALLBACKS = listOf("gemini-3.8-flash-lite-tts")
+
+        /** Asked model → (model used instead, when), shared by every request of the app. */
+        private val replaced = java.util.concurrent.ConcurrentHashMap<String, Pair<String, Long>>()
+
+        private fun stillReplaced(asked: String): String? {
+            val (model, at) = replaced[asked] ?: return null
+            if (SystemClock.elapsedRealtime() - at < OVERLOAD_MEMORY_MS) return model
+            replaced.remove(asked)
+            return null
+        }
+
+        /** Models to try instead of [model]: speech ones for a TTS model, text ones otherwise. */
+        fun fallbacksFor(model: String): List<String> =
+            (if (model.contains("tts", ignoreCase = true)) TTS_FALLBACKS else TEXT_FALLBACKS).filter { it != model }
+
+        /** The next model to try for [asked] after [tried], or null when none is left. */
+        fun nextModel(asked: String, tried: List<String>): String? = fallbacksFor(asked).firstOrNull { it !in tried }
 
         /** The text the model wrote: `output_text`, or the text items of its model_output steps. */
         fun outputText(interaction: JSONObject): String? {
