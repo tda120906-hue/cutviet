@@ -91,23 +91,50 @@ class VoiceEngine(context: Context) {
     fun speak(text: String, voiceName: String?, pitch: Float, rate: Float) {
         val engine = tts ?: return
         apply(voiceName, pitch, rate)
-        engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, "preview")
+        // Text longer than the engine takes at once is queued piece by piece.
+        splitForEngine(text, maxInputLength).forEachIndexed { i, part ->
+            engine.speak(part, if (i == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, "preview$i")
+        }
     }
 
     fun stop() {
         tts?.stop()
     }
 
+    /** Most characters the engine takes in one request; longer text is split ([splitForEngine]). */
     val maxInputLength: Int
         get() = runCatching { TextToSpeech.getMaxSpeechInputLength() }.getOrDefault(4000) - 50
 
     /**
-     * Synthesizes [text] into a WAV file and returns its exact duration in ms, or null on failure.
-     * Must be called from a coroutine; the engine works on its own thread.
+     * Synthesizes [text] of any length into a WAV file and returns its exact duration in ms, or null
+     * on failure. Text over the engine's limit is read piece by piece (split between sentences) and
+     * the pieces are joined into one WAV. Must be called from a coroutine.
      */
     suspend fun synthesize(text: String, voiceName: String?, pitch: Float, rate: Float, out: File): Long? {
-        val engine = tts ?: return null
         if (status.value != Status.READY || text.isBlank()) return null
+        val parts = splitForEngine(text, maxInputLength)
+        val ms = if (parts.size == 1) {
+            synthesizeOne(parts[0], voiceName, pitch, rate, out)
+        } else {
+            val pieces = parts.mapIndexed { i, _ -> File(out.parentFile, "${out.nameWithoutExtension}_part$i.wav") }
+            try {
+                for (i in parts.indices) {
+                    synthesizeOne(parts[i], voiceName, pitch, rate, pieces[i]) ?: return null
+                }
+                WavConcat.join(pieces, out)
+            } finally {
+                pieces.forEach { it.delete() }
+            }
+        } ?: return null
+        // Learn this voice's real speed so the instant estimate gets closer each time.
+        val syllables = syllableCount(text)
+        val speechSec = ms / 1000.0 * rate - pauseSeconds(text)
+        if (syllables >= 3 && speechSec > 0.3) calibration[voiceName.orEmpty()] = syllables / speechSec
+        return ms
+    }
+
+    private suspend fun synthesizeOne(text: String, voiceName: String?, pitch: Float, rate: Float, out: File): Long? {
+        val engine = tts ?: return null
         val id = "u" + System.nanoTime()
         val done = CompletableDeferred<Boolean>()
         pending[id] = done
@@ -122,12 +149,7 @@ class VoiceEngine(context: Context) {
         }
         val ok = withTimeoutOrNull(120_000) { done.await() } ?: false
         if (!ok || !out.exists() || out.length() < 100) return null
-        val ms = durationOf(out) ?: return null
-        // Learn this voice's real speed so the instant estimate gets closer each time.
-        val syllables = syllableCount(text)
-        val speechSec = ms / 1000.0 * rate - pauseSeconds(text)
-        if (syllables >= 3 && speechSec > 0.3) calibration[voiceName.orEmpty()] = syllables / speechSec
-        return ms
+        return durationOf(out)
     }
 
     /** Instant estimate of the spoken length in ms (before synthesizing). */
@@ -158,6 +180,26 @@ class VoiceEngine(context: Context) {
             Style("Trẻ em", 1.45f),
             Style("Lớn tuổi", 0.7f),
         )
+
+        /**
+         * Splits [text] into pieces of at most [max] characters for the engine, cutting after a
+         * sentence end if possible, else after a comma, else at a space; short text stays whole.
+         */
+        fun splitForEngine(text: String, max: Int): List<String> {
+            val limit = max.coerceAtLeast(20)
+            val parts = ArrayList<String>()
+            var rest = text.trim()
+            while (rest.length > limit) {
+                val window = rest.substring(0, limit)
+                val cut = listOf(Regex("[.!?…\\n][\"”’)\\]]*(?=\\s)"), Regex("[,;:](?=\\s)"), Regex("\\s"))
+                    .firstNotNullOfOrNull { r -> r.findAll(window).lastOrNull()?.takeIf { it.range.last >= limit / 2 }?.range?.last }
+                val end = (cut ?: (limit - 1)) + 1
+                parts += rest.substring(0, end).trim()
+                rest = rest.substring(end).trim()
+            }
+            if (rest.isNotEmpty()) parts += rest
+            return parts.filter { it.isNotBlank() }.ifEmpty { listOf(text) }
+        }
 
         fun syllableCount(text: String): Int =
             text.split(Regex("[\\s\\p{Punct}…“”‘’–—]+")).count { w -> w.any { it.isLetterOrDigit() } }

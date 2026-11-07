@@ -190,14 +190,13 @@ class DubbingPipeline(
     /** Speaks one line into its time; a line still too long at 1.15x is reworded shorter once ([reword]). */
     private suspend fun speak(index: Int, seg: SpeechSegment, text: String, roomMs: Long, s: Settings, reword: Boolean = true): DubbedSegment? {
         if (text.isEmpty()) return null
-        // One sentence is far below the engine's input limit; cut defensively anyway.
-        var line = text.take(voice.maxInputLength)
+        var line = text
         var best = render(index, 0, reading(index, line), seg.slotMs, roomMs, s) ?: return null
         val limit = AudioFitter.upper(seg.slotMs, roomMs)
         if (reword && best.fit.durationMs > limit) {
             val syllables = VoiceEngine.syllableCount(line)
             val target = (syllables * limit.toDouble() / best.fit.durationMs * 0.9).toInt().coerceAtLeast(1)
-            val shorter = translator.shorten(seg.text, line, s.language, target)?.take(voice.maxInputLength)
+            val shorter = translator.shorten(seg.text, line, s.language, target)
             if (shorter != null && VoiceEngine.syllableCount(shorter) < syllables) {
                 val again = render(index, 1, reading(index, shorter), seg.slotMs, roomMs, s)
                 DubLog.i(TAG, "segment $index reworded $syllables→${VoiceEngine.syllableCount(shorter)} syllables: ${again?.fit?.durationMs} ms")

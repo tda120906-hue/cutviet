@@ -849,7 +849,7 @@ private fun VoicePanel(vm: EditorViewModel) {
 
     OutlinedTextField(
         value = text,
-        onValueChange = { if (it.length <= engine.maxInputLength) text = it },
+        onValueChange = { text = it },
         modifier = Modifier.fillMaxWidth(),
         label = { Text("Nhập văn bản cần đọc") },
         minLines = 2,
@@ -886,7 +886,7 @@ private fun VoicePanel(vm: EditorViewModel) {
                 )
             }
             Text(
-                "${VoiceEngine.syllableCount(text)} tiếng · ${text.length}/${engine.maxInputLength} ký tự",
+                "${VoiceEngine.syllableCount(text)} tiếng · ${text.length} ký tự · không giới hạn độ dài",
                 color = TextDim, fontSize = 11.sp,
             )
         }
