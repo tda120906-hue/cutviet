@@ -37,7 +37,7 @@ class GeminiDubber(
     data class Role(val voice: String, val gender: Gender, val description: String)
 
     private var stoppedNotice: String? = null
-    override val notice: String? get() = listOfNotNull(stoppedNotice, api.switchNote).joinToString(". ").ifEmpty { null }
+    override val notice: String? get() = listOfNotNull(stoppedNotice, GeminiApi.switchNote()).joinToString(". ").ifEmpty { null }
 
     private class Voiced(val file: File, val ms: Long)
 

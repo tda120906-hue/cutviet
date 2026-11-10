@@ -68,6 +68,7 @@ import com.cutviet.editor.media.dubbing.DubMode
 import com.cutviet.editor.media.dubbing.OnlineEngine
 import com.cutviet.editor.media.dubbing.DubModel
 import com.cutviet.editor.media.dubbing.DubSettings
+import com.cutviet.editor.media.dubbing.GeminiApi
 import com.cutviet.editor.media.dubbing.ModelDownloadWorker
 import com.cutviet.editor.media.dubbing.ModelStore
 import com.cutviet.editor.media.dubbing.SourceLanguage
@@ -277,6 +278,7 @@ private fun ModelsTab(settings: DubSettings) {
     Label("Model đọc (kiểu Tự nhiên)")
     OutlinedTextField(value = ttsModel, onValueChange = { ttsModel = it; settings.geminiTtsModel = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
     Text("Để trống là dùng model mặc định. Xem lượt miễn phí còn lại ở aistudio.google.com/rate-limit.", color = TextDim, fontSize = 12.sp)
+    GeminiCheck(settings, enabled = key.isNotBlank())
     Label("Model Gemini Live (kiểu Phiên dịch trực tiếp)")
     OutlinedTextField(value = model, onValueChange = { model = it; settings.geminiModel = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -286,6 +288,52 @@ private fun ModelsTab(settings: DubSettings) {
         }
         Switch(checked = simulate, onCheckedChange = { simulate = it; settings.simulateQuota = it })
     }
+}
+
+/**
+ * "Kiểm tra Gemini": sends one small request to each model the online branch may use (the two set
+ * above and their lighter replacements) and shows which ones answer this key right now. The app
+ * then uses the first one that works.
+ */
+@Composable
+private fun GeminiCheck(settings: DubSettings, enabled: Boolean) {
+    val scope = rememberCoroutineScope()
+    var checking by remember { mutableStateOf(false) }
+    var results by remember { mutableStateOf<List<GeminiApi.Probe>>(emptyList()) }
+    var verdict by remember { mutableStateOf<String?>(null) }
+    OutlinedButton(
+        enabled = enabled && !checking,
+        onClick = {
+            checking = true
+            results = emptyList()
+            verdict = null
+            scope.launch {
+                val api = GeminiApi(settings.geminiKey)
+                try {
+                    val use = ArrayList<String>()
+                    for (asked in listOf(settings.geminiTextModel, settings.geminiTtsModel)) {
+                        val probes = ArrayList<GeminiApi.Probe>()
+                        for (m in listOf(asked) + GeminiApi.fallbacksFor(asked)) {
+                            val p = api.probe(m)
+                            probes += p
+                            results = results + p
+                        }
+                        GeminiApi.remember(asked, probes)
+                        use += GeminiApi.choose(asked, probes) ?: "không model nào"
+                    }
+                    verdict = "Nghe & dịch sẽ dùng: ${use[0]}. Đọc sẽ dùng: ${use[1]}."
+                } finally {
+                    api.shutdown()
+                    checking = false
+                }
+            }
+        },
+    ) { Text(if (checking) "Đang kiểm tra…" else "Kiểm tra Gemini") }
+    Text("Gửi thử một yêu cầu nhỏ tới từng model để biết model nào đang chạy được với khoá này. Mỗi lần kiểm tra dùng 1 lượt của mỗi model.", color = TextDim, fontSize = 12.sp)
+    results.forEach { p ->
+        Text("${if (p.ok) "✓" else "✗"} ${p.model}: ${p.message}", color = if (p.ok) Color(0xFF7BD88F) else Color(0xFFFFB86B), fontSize = 12.sp)
+    }
+    verdict?.let { Text(it, color = Color.White, fontSize = 12.sp) }
 }
 
 /** The on-phone dubbing log, to copy and send when something goes wrong. */

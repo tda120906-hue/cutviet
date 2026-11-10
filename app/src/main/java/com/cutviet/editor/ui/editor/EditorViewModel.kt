@@ -1052,6 +1052,7 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
             append("Đã tạo ${cues.size} câu phụ đề")
             append(if (info.outputData.getBoolean(SubtitleWorker.KEY_ONLINE, false)) " (online)." else " (offline).")
             if (fallback != null) append(" Online lỗi nên đã chuyển offline: $fallback")
+            info.outputData.getString(SubtitleWorker.KEY_NOTE)?.let { append(" Lưu ý: $it.") }
         }
     }
 

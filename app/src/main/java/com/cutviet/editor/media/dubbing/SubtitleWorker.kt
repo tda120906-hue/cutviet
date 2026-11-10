@@ -243,7 +243,13 @@ class SubtitleWorker(context: Context, params: WorkerParameters) : CoroutineWork
             }
             if (out.cues.isEmpty()) return fail("Không nghe thấy lời nói nào trong video")
             resultFile(applicationContext, id.toString()).writeText(encode(out.cues).toString())
-            return Result.success(workDataOf(KEY_COUNT to out.cues.size, KEY_ONLINE to out.usedOnline, KEY_FALLBACK to out.fallbackReason))
+            return Result.success(
+                workDataOf(
+                    KEY_COUNT to out.cues.size, KEY_ONLINE to out.usedOnline, KEY_FALLBACK to out.fallbackReason,
+                    // Which lighter Gemini model listened, when the usual one was busy or used up.
+                    KEY_NOTE to (if (out.usedOnline) GeminiApi.switchNote(speech = false) else null),
+                ),
+            )
         } catch (e: StepUnavailableException) {
             return fail(e.message ?: "Bước này chưa dùng được trên máy")
         } catch (e: CancellationException) {

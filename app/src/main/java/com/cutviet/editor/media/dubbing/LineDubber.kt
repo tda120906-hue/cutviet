@@ -109,7 +109,7 @@ class LineDubber(private val context: Context, private val workDir: File, privat
             val maxPlayback = maxOf(1f, s.maxDubSpeed / spoken.rate)
             val playback = if (spoken.ms > room + DubTime.TOLERANCE_MS) (spoken.ms.toFloat() / room).coerceIn(1f, maxPlayback)
             else DubTime.fill(spoken.ms, spoken.rate, slot)
-            if (note == null) note = api?.switchNote
+            if (note == null && api != null) note = GeminiApi.switchNote()
             val gain = Loudness.gainTo(DubbingPipeline.TARGET_LUFS, listOf(spoken.file))
             DubLog.i(TAG, "line done: \"${text.take(60)}\" ${spoken.ms}ms at rate ${spoken.rate}, played x${"%.2f".format(playback)}, room ${room}ms, ${if (phone) "phone" else r.voice.gemini}")
             return Output(

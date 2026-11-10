@@ -21,9 +21,10 @@ import kotlin.coroutines.resumeWithException
 /**
  * Minimal client for the Gemini API's Interactions endpoint (POST /v1beta/interactions), used by
  * the natural online dub for listening (gemini-3.8-flash) and speaking (gemini-3.8-flash-tts).
- * Short rate limits are waited out; a used-up daily quota is reported as [QuotaException]. A model
- * Google reports as overloaded (503) is tried twice more, then a lighter one ([fallbacksFor]) is used
- * instead, also by later requests for a while ([OVERLOAD_MEMORY_MS]).
+ * Short rate limits are waited out. A model that is overloaded (503) or out of free requests (429)
+ * is replaced by the next lighter one ([fallbacksFor]), which has its own allowance; later requests
+ * skip the busy model for a while ([SWITCH_MEMORY_MS]). Only when every model is used up is the
+ * quota reported as [QuotaException].
  */
 class GeminiApi(
     private val apiKey: String,
@@ -35,6 +36,15 @@ class GeminiApi(
 
     /** The server refused this request itself (400): another request may still work. */
     class Rejected(message: String) : OnlineUnavailableException(message)
+
+    /** Why a model was left for a lighter one. */
+    enum class Why(val vi: String, val log: String) {
+        OVERLOADED("quá tải", "overloaded (503)"),
+        QUOTA("hết lượt", "out of quota (429)"),
+        MISSING("không dùng được", "not available (404)"),
+    }
+
+    private class Replaced(val model: String, val why: Why, val at: Long)
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -50,11 +60,25 @@ class GeminiApi(
         }
         if (apiKey.isBlank()) throw OnlineUnavailableException("Chưa nhập khoá Gemini")
         val asked = body.optString("model")
-        var model = stillReplaced(asked) ?: asked
+        var model = replacementFor(asked)?.model ?: asked
         val tried = mutableListOf(model)
         var payload = body.put("model", model).toString()
         var attempt = 0
         var overloaded = 0
+
+        /** Moves on to the next lighter model, for this request and the ones after; false when none is left. */
+        fun switch(why: Why): Boolean {
+            val next = nextModel(asked, tried) ?: return false
+            DubLog.w(TAG, "$what: $model ${why.log}, using $next")
+            // The note for the user keeps why the model they asked for was left.
+            replaced[asked] = Replaced(next, replacementFor(asked)?.why ?: why, SystemClock.elapsedRealtime())
+            model = next
+            tried += next
+            payload = body.put("model", next).toString()
+            attempt = 0
+            overloaded = 0
+            return true
+        }
         while (true) {
             val t0 = SystemClock.elapsedRealtime()
             val (code, text) = try {
@@ -79,49 +103,81 @@ class GeminiApi(
                 return json
             }
             val err = errorOf(text)
+            val chain = if (tried.size > 1) ", đã thử ${tried.joinToString()}" else ""
             if (code == 429) {
                 val quota = quotaOf(text)
-                if (quota.daily) throw QuotaException("Gemini hết lượt miễn phí trong ngày cho $what (429)")
-                if (attempt++ < MAX_RETRIES) {
+                if (!quota.daily && attempt++ < MAX_RETRIES) {
                     val wait = (quota.retryMs ?: (5_000L * attempt)).coerceIn(1_000, 65_000)
-                    DubLog.w(TAG, "$what: rate limited, waiting ${wait / 1000} s")
+                    DubLog.w(TAG, "$what: $model rate limited, waiting ${wait / 1000} s")
                     delay(wait)
                     continue
                 }
-                throw QuotaException("Gemini báo hết hạn mức (429) cho $what")
+                // Out of requests on this model: a lighter one has its own, larger allowance.
+                DubLog.w(TAG, "$what: $model out of quota: ${text.take(300)}")
+                if (switch(Why.QUOTA)) continue
+                throw QuotaException(
+                    if (quota.daily) "Gemini hết lượt miễn phí trong ngày cho $what (429$chain)" else "Gemini báo hết hạn mức (429) cho $what$chain",
+                )
             }
-            // Overloaded: a lighter model after two more tries, while the asked one stays busy.
-            // A replacement this key cannot use (404) is passed over the same way.
-            if ((code == 503 && ++overloaded > OVERLOAD_RETRIES) || (code == 404 && model != asked)) {
-                val next = nextModel(asked, tried)
-                if (next != null) {
-                    DubLog.w(TAG, "$what: $model ${if (code == 503) "overloaded (503)" else "not available (404)"}, using $next")
-                    model = next
-                    tried += next
-                    replaced[asked] = next to SystemClock.elapsedRealtime()
-                    payload = body.put("model", model).toString()
-                    attempt = 0
-                    overloaded = 0
+            if (code == 503) {
+                // Each try may count against the day's few free requests: one more, then a lighter model.
+                if (overloaded++ < OVERLOAD_RETRIES) {
+                    DubLog.w(TAG, "$what: $model overloaded (503), retrying")
+                    delay(3_000L * overloaded)
                     continue
                 }
-                DubLog.w(TAG, "$what: overloaded (503) on ${tried.joinToString()}, $code on $model")
+                if (switch(Why.OVERLOADED)) continue
+                DubLog.w(TAG, "$what: overloaded (503) on ${tried.joinToString()}: ${text.take(300)}")
                 throw OnlineUnavailableException("Máy chủ Gemini đang quá tải (503, lỗi phía Google) với ${tried.joinToString()} ($what)")
             }
+            // A replacement this key cannot use is passed over.
+            if (code == 404 && model != asked && switch(Why.MISSING)) continue
             if (code >= 500 && attempt++ < MAX_RETRIES) {
                 DubLog.w(TAG, "$what: server error $code, retrying")
                 delay(3_000L * attempt)
                 continue
             }
-            DubLog.w(TAG, "$what failed: $code ${text.take(300)}")
+            DubLog.w(TAG, "$what failed on $model: $code ${text.take(300)}")
             if (code == 400) throw Rejected("Gemini từ chối yêu cầu ($what): ${err ?: code}")
             throw OnlineUnavailableException(
                 when (code) {
                     401, 403 -> "Khoá Gemini không hợp lệ hoặc không có quyền dùng model ($what, $code)"
-                    404 -> "Không tìm thấy model ($what): ${err ?: code}"
-                    else -> "Gemini lỗi $code ($what): ${err ?: ""}"
+                    404 -> "Không tìm thấy model $model ($what$chain): ${err ?: code}"
+                    else -> "Gemini lỗi $code ($what$chain): ${err ?: ""}"
                 },
             )
         }
+    }
+
+    /** What one model answered to a small test request ([probe]). */
+    class Probe(val model: String, val code: Int, val message: String) {
+        val ok: Boolean get() = code == 200
+    }
+
+    /**
+     * One small request to [model], without retries or replacements: does it answer this key right
+     * now? A speech model is asked to say two words, any other to write one.
+     */
+    suspend fun probe(model: String): Probe {
+        if (apiKey.isBlank()) return Probe(model, 0, "chưa nhập khoá Gemini")
+        val body = if (isSpeech(model)) {
+            GeminiDubber.ttsRequest(model, "Xin chào.", "Kore")
+        } else {
+            JSONObject().put("model", model)
+                .put("input", JSONArray().put(JSONObject().put("type", "text").put("text", "Trả lời đúng một chữ: OK")))
+        }
+        val t0 = SystemClock.elapsedRealtime()
+        val (code, text) = try {
+            post(body.toString())
+        } catch (e: IOException) {
+            DubLog.w(TAG, "probe $model: ${e.javaClass.simpleName}: ${e.message}")
+            return Probe(model, 0, "không kết nối được (${e.message})")
+        }
+        val ms = SystemClock.elapsedRealtime() - t0
+        val failed = code == 200 && runCatching { JSONObject(text).optString("status") }.getOrNull() == "failed"
+        DubLog.i(TAG, "probe $model: $code in $ms ms${if (code != 200 || failed) " ${text.take(300)}" else ""}")
+        if (failed) return Probe(model, -1, "Gemini báo lỗi khi trả lời")
+        return Probe(model, code, probeMessage(code, ms, text))
     }
 
     private suspend fun post(payload: String): Pair<Int, String> = suspendCancellableCoroutine { cont ->
@@ -145,10 +201,6 @@ class GeminiApi(
         })
     }
 
-    /** "gemini-3.8-flash quá tải nên dùng gemini-3.5-flash" for the models swapped now, or null. */
-    val switchNote: String?
-        get() = replaced.keys.mapNotNull { a -> stillReplaced(a)?.let { "$a quá tải nên dùng $it" } }.joinToString("; ").ifEmpty { null }
-
     fun shutdown() {
         client.dispatcher.executorService.shutdown()
         client.connectionPool.evictAll()
@@ -161,32 +213,83 @@ class GeminiApi(
         const val ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/interactions"
         private const val MAX_RETRIES = 4
 
-        /** Tries on an overloaded (503) model before a lighter one is used. */
-        private const val OVERLOAD_RETRIES = 2
+        /** Extra tries on an overloaded (503) model before a lighter one is used. */
+        private const val OVERLOAD_RETRIES = 1
 
-        /** How long later requests skip a model that was overloaded. */
-        const val OVERLOAD_MEMORY_MS = 30 * 60_000L
+        /** How long later requests skip a model that was overloaded or out of requests. */
+        const val SWITCH_MEMORY_MS = 30 * 60_000L
 
-        /** Lighter models to use when the one asked for is overloaded, best first. */
-        private val TEXT_FALLBACKS = listOf("gemini-3.5-flash", "gemini-3.5-flash-lite")
+        /**
+         * Lighter models to use when the one asked for is overloaded or out of free requests, best
+         * first. The Flash-Lite ones have a much larger free allowance per day than Flash.
+         */
+        private val TEXT_FALLBACKS = listOf("gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite")
         private val TTS_FALLBACKS = listOf("gemini-3.8-flash-lite-tts")
 
-        /** Asked model → (model used instead, when), shared by every request of the app. */
-        private val replaced = java.util.concurrent.ConcurrentHashMap<String, Pair<String, Long>>()
+        /** Asked model → the model used instead, shared by every request of the app. */
+        private val replaced = java.util.concurrent.ConcurrentHashMap<String, Replaced>()
 
-        private fun stillReplaced(asked: String): String? {
-            val (model, at) = replaced[asked] ?: return null
-            if (SystemClock.elapsedRealtime() - at < OVERLOAD_MEMORY_MS) return model
+        private fun replacementFor(asked: String): Replaced? {
+            val r = replaced[asked] ?: return null
+            if (SystemClock.elapsedRealtime() - r.at < SWITCH_MEMORY_MS) return r
             replaced.remove(asked)
             return null
         }
 
+        /**
+         * "gemini-3.8-flash quá tải nên dùng gemini-3.6-flash" for the models swapped now, or null.
+         * [speech]: only the models that speak (true) or the ones that listen and write (false).
+         */
+        fun switchNote(speech: Boolean? = null): String? =
+            replaced.keys.sorted().filter { speech == null || isSpeech(it) == speech }
+                .mapNotNull { a -> replacementFor(a)?.let { "$a ${it.why.vi} nên dùng ${it.model}" } }
+                .joinToString("; ").ifEmpty { null }
+
+        fun isSpeech(model: String): Boolean = model.contains("tts", ignoreCase = true)
+
         /** Models to try instead of [model]: speech ones for a TTS model, text ones otherwise. */
-        fun fallbacksFor(model: String): List<String> =
-            (if (model.contains("tts", ignoreCase = true)) TTS_FALLBACKS else TEXT_FALLBACKS).filter { it != model }
+        fun fallbacksFor(model: String): List<String> = (if (isSpeech(model)) TTS_FALLBACKS else TEXT_FALLBACKS).filter { it != model }
 
         /** The next model to try for [asked] after [tried], or null when none is left. */
         fun nextModel(asked: String, tried: List<String>): String? = fallbacksFor(asked).firstOrNull { it !in tried }
+
+        /**
+         * What the test ([probe]) found for [asked] and its replacements, in order: the first model
+         * that answered is the one to use from now on, or null to keep things as they are.
+         */
+        fun choose(asked: String, probes: List<Probe>): String? {
+            val first = probes.firstOrNull() ?: return null
+            if (first.model != asked) return null
+            if (first.ok) return asked
+            return probes.drop(1).firstOrNull { it.ok }?.model
+        }
+
+        /** Makes later requests use what the test found working ([choose]). */
+        fun remember(asked: String, probes: List<Probe>) {
+            val use = choose(asked, probes) ?: return
+            if (use == asked) {
+                replaced.remove(asked)
+            } else {
+                val why = when (probes.first().code) {
+                    429 -> Why.QUOTA
+                    404 -> Why.MISSING
+                    else -> Why.OVERLOADED
+                }
+                replaced[asked] = Replaced(use, why, SystemClock.elapsedRealtime())
+                DubLog.i(TAG, "after the test: $asked ${why.log}, using $use")
+            }
+        }
+
+        /** The test's verdict on one model, for the user. */
+        fun probeMessage(code: Int, ms: Long, body: String): String = when (code) {
+            200 -> "chạy được (${ms / 1000}.${(ms % 1000) / 100} giây)"
+            503 -> "đang quá tải (503, lỗi phía máy chủ Google)"
+            429 -> if (quotaOf(body).daily) "hết lượt miễn phí hôm nay (429)" else "hết lượt hoặc đang bị giới hạn tốc độ (429)"
+            404 -> "khoá này không dùng được model này (404)"
+            401, 403 -> "khoá không hợp lệ hoặc không có quyền ($code)"
+            400 -> "bị từ chối (400): ${errorOf(body) ?: "không rõ"}"
+            else -> "lỗi $code: ${errorOf(body) ?: "không rõ"}"
+        }
 
         /** The text the model wrote: `output_text`, or the text items of its model_output steps. */
         fun outputText(interaction: JSONObject): String? {
