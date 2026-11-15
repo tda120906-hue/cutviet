@@ -11,14 +11,26 @@ import kotlin.math.sin
 
 class PiperTtsTest {
     @Test
-    fun clausesBecomeSentencesOfPhonemesLikePiper() {
-        // Two clauses of one sentence, then a second sentence; English part made Vietnamese.
-        val raw = "hˈom nˈaj\u0001,\u00010\u0002(en)ˈap(vi) mˈəːɜj\u0001.\u00011\u0002ɗˈuːŋ\u0001?\u00011"
-        val s = PiperTts.sentences(raw)
-        assertEquals(2, s.size)
-        assertEquals("hˈom nˈaj, ˈaːɜp mˈəːɜj.", s[0].joinToString(""))
+    fun clausesKeepPunctuationAndGetTheirPause() {
+        val raw = "hˈom nˈaj\u0001,\u00010\u0002(en)ˈap(vi) mˈəːɜj\u0001.\u00011\u0002ɗˈuːŋ\u0001?\u00011\u0002\u0001\u00010"
+        val c = PiperTts.clauses(raw)
+        assertEquals(3, c.size)
+        assertEquals("hˈom nˈaj,", c[0].phonemes.joinToString(""))
+        assertEquals(PiperTts.Pause.COMMA, c[0].pause)
+        assertEquals("ˈaːɜp mˈəːɜj.", c[1].phonemes.joinToString(""))
+        assertEquals(PiperTts.Pause.SENTENCE, c[1].pause)
         // Tone and diacritics are their own phonemes after NFD ("t̪" → "t", "̪").
-        assertTrue(PiperTts.sentences("t̪ˈa\u0001.\u00011")[0].containsAll(listOf("t", "̪")))
+        assertTrue(PiperTts.clauses("t̪ˈa\u0001.\u00011")[0].phonemes.containsAll(listOf("t", "\u032A")))
+    }
+
+    @Test
+    fun silenceAroundAClauseIsCut() {
+        val rate = 22050
+        val voice = FloatArray(rate / 2) { sin(2 * PI * 200 * it / rate).toFloat() * 0.5f }
+        val x = FloatArray(rate / 3) + voice + FloatArray(rate / 3)
+        val y = PiperTts.trimSilence(x, rate)
+        // Half a second of voice plus about 20 ms kept on each side.
+        assertTrue("${y.size}", y.size in voice.size..(voice.size + rate / 20 + rate / 50))
     }
 
     @Test
