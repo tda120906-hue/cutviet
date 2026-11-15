@@ -28,6 +28,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Flip
 import androidx.compose.material.icons.filled.FormatBold
@@ -106,7 +107,10 @@ fun PanelHost(vm: EditorViewModel, panel: Panel, modifier: Modifier = Modifier.h
         ) {
             Text(panel.title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp, modifier = Modifier.weight(1f))
             IconButton(onClick = { vm.closePanel() }) {
-                Icon(Icons.Filled.Check, "Xong", tint = Accent)
+                // The voice-over is only changed by its own button at the top of the panel; a tick here
+                // was taken for "update" (owner, 2026-11-15), so this panel closes with a plain ✕.
+                if (panel == Panel.VOICE) Icon(Icons.Filled.Close, "Đóng", tint = Color.White)
+                else Icon(Icons.Filled.Check, "Xong", tint = Accent)
             }
         }
         Column(
@@ -829,6 +833,24 @@ private fun VoicePanel(vm: EditorViewModel) {
         VoiceEngine.Status.READY -> Unit
     }
 
+    // Main buttons first, so they are never mistaken for something else or scrolled away.
+    Row(Modifier.padding(bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        OutlinedButton(
+            enabled = text.isNotBlank(),
+            onClick = {
+                if (speaking) { engine.stop(); speaking = false } else { engine.speak(text, voiceName, pitch, rate); speaking = true }
+            },
+        ) { Text(if (speaking) "Dừng" else "Nghe thử") }
+        Spacer(Modifier.width(8.dp))
+        Button(
+            enabled = text.isNotBlank() && !vm.busy,
+            onClick = {
+                engine.stop()
+                vm.addVoice(VoiceSpec(text.trim(), voiceName, pitch, rate), startMs, editing?.id) { ok -> if (ok) vm.closePanel() }
+            },
+            colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.Black),
+        ) { Text(if (editing != null) "Cập nhật giọng đọc" else "Thêm vào video") }
+    }
     OutlinedTextField(
         value = text,
         onValueChange = { text = it },
@@ -889,22 +911,5 @@ private fun VoicePanel(vm: EditorViewModel) {
     LabeledSlider("Tốc độ đọc", rate, 0.5f..3f, formatSpeed(rate)) { v -> rate = (v * 20).roundToInt() / 20f }
     Row(Modifier.horizontalScroll(rememberScrollState())) {
         listOf(0.8f, 1f, 1.25f, 1.5f, 1.75f, 2f, 2.5f, 3f).forEach { r -> Chip(formatSpeed(r), rate == r) { rate = r } }
-    }
-    Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        OutlinedButton(
-            enabled = text.isNotBlank(),
-            onClick = {
-                if (speaking) { engine.stop(); speaking = false } else { engine.speak(text, voiceName, pitch, rate); speaking = true }
-            },
-        ) { Text(if (speaking) "Dừng" else "Nghe thử") }
-        Spacer(Modifier.width(8.dp))
-        Button(
-            enabled = text.isNotBlank() && !vm.busy,
-            onClick = {
-                engine.stop()
-                vm.addVoice(VoiceSpec(text.trim(), voiceName, pitch, rate), startMs, editing?.id) { ok -> if (ok) vm.closePanel() }
-            },
-            colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.Black),
-        ) { Text(if (editing != null) "Cập nhật giọng đọc" else "Thêm vào video") }
     }
 }

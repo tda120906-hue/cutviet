@@ -86,6 +86,27 @@ fun SubtitleDialog(vm: EditorViewModel, onDismiss: () -> Unit, onOpenModels: () 
                 TextButton(onClick = onDismiss) { Text("Đóng", color = Accent) }
             }
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp)) {
+                // The create button first (owner, 2026-11-15).
+                val status = vm.subtitleStatus
+                if (status != null) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(status, color = Color.White, fontSize = 14.sp)
+                    LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 6.dp), color = Accent)
+                    OutlinedButton(onClick = { vm.cancelSubtitles() }) { Text("Huỷ tạo phụ đề") }
+                } else {
+                    Button(
+                        onClick = {
+                            if (Build.VERSION.SDK_INT >= 33) notify.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            vm.startSubtitles(language, separate && separationReady)
+                            onDismiss()
+                        },
+                        enabled = vm.project.clips.any { !it.isImage && it.hasAudio },
+                        colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Tạo phụ đề") }
+                    Text("Chạy nền kể cả khi tắt màn hình; xem tiến trình trên thanh thông báo.", color = TextDim, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
+                }
+                Spacer(Modifier.height(8.dp))
                 Text(
                     "Nghe lời nói trong tất cả các đoạn video, dịch sang tiếng Việt và đặt phụ đề đúng thời điểm trên timeline. " +
                         "Sửa từng câu được, và khi xuất có thể ghi phụ đề vào video.",
@@ -141,25 +162,6 @@ fun SubtitleDialog(vm: EditorViewModel, onDismiss: () -> Unit, onOpenModels: () 
                     Text("Phụ đề mới sẽ thay ${vm.project.subtitles.size} câu đang có.", color = Color(0xFFFFC46B), fontSize = 12.sp)
                 }
 
-                val status = vm.subtitleStatus
-                if (status != null) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(status, color = Color.White, fontSize = 14.sp)
-                    LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 6.dp), color = Accent)
-                    OutlinedButton(onClick = { vm.cancelSubtitles() }) { Text("Huỷ tạo phụ đề") }
-                } else {
-                    Button(
-                        onClick = {
-                            if (Build.VERSION.SDK_INT >= 33) notify.launch(Manifest.permission.POST_NOTIFICATIONS)
-                            vm.startSubtitles(language, separate && separationReady)
-                            onDismiss()
-                        },
-                        enabled = vm.project.clips.any { !it.isImage && it.hasAudio },
-                        colors = ButtonDefaults.buttonColors(containerColor = Accent),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Tạo phụ đề") }
-                    Text("Chạy nền kể cả khi tắt màn hình; xem tiến trình trên thanh thông báo.", color = TextDim, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
-                }
             }
         }
     }

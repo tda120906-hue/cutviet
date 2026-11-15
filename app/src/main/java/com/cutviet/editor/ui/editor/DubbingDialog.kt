@@ -127,6 +127,31 @@ private fun DubTab(vm: EditorViewModel, settings: DubSettings, onOpenModels: () 
     val index = vm.selected ?: vm.project.clipAt(vm.playheadMs)?.first
     val clip = index?.let { vm.project.clips.getOrNull(it) }
 
+    // The start button first (owner, 2026-11-15): settings below only change how it runs.
+    val missing = missingModels(context, mode, settings)
+    if (missing.isNotEmpty()) {
+        Text("Còn thiếu: " + missing.joinToString { it.label }, color = Color(0xFFFFC46B), fontSize = 13.sp)
+        TextButton(onClick = onOpenModels) { Text("Tải model", color = Accent) }
+    }
+
+    vm.dubStatus?.let { status ->
+        Spacer(Modifier.height(8.dp))
+        Text(status, color = Color.White, fontSize = 14.sp)
+        LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 6.dp), color = Accent)
+        OutlinedButton(onClick = { vm.cancelDubbing() }) { Text("Huỷ lồng tiếng") }
+    } ?: Button(
+        onClick = {
+            if (Build.VERSION.SDK_INT >= 33) notify.launch(Manifest.permission.POST_NOTIFICATIONS)
+            settings.originalVolume = original
+            vm.startDubbing(language, voiceName, original)
+            onStarted()
+        },
+        enabled = clip != null && voices.isNotEmpty(),
+        colors = ButtonDefaults.buttonColors(containerColor = Accent),
+        modifier = Modifier.fillMaxWidth(),
+    ) { Text("Bắt đầu lồng tiếng") }
+    Text("Chạy nền kể cả khi tắt màn hình; xem tiến trình trên thanh thông báo.", color = TextDim, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
+    Spacer(Modifier.height(8.dp))
     Label("Đoạn được lồng tiếng")
     Text(
         if (clip == null) "Chọn một đoạn video trên timeline trước." else "Đoạn ${index + 1} · ${com.cutviet.editor.ui.formatTime(clip.durationMs)}",
@@ -211,30 +236,6 @@ private fun DubTab(vm: EditorViewModel, settings: DubSettings, onOpenModels: () 
     Slider(value = minVideo, onValueChange = { minVideo = (it * 20).roundToInt() / 20f }, onValueChangeFinished = { settings.minVideoSpeed = minVideo }, valueRange = 0.8f..1f, steps = 3)
     Text("Gợi ý: x1,25 và x0,85. Đẩy lên x1,4 giọng nghe vội rõ; video x0,8 thấy chậm ở cảnh nhiều chuyển động.", color = TextDim, fontSize = 12.sp)
 
-    Spacer(Modifier.height(12.dp))
-    val missing = missingModels(context, mode, settings)
-    if (missing.isNotEmpty()) {
-        Text("Còn thiếu: " + missing.joinToString { it.label }, color = Color(0xFFFFC46B), fontSize = 13.sp)
-        TextButton(onClick = onOpenModels) { Text("Tải model", color = Accent) }
-    }
-
-    vm.dubStatus?.let { status ->
-        Spacer(Modifier.height(8.dp))
-        Text(status, color = Color.White, fontSize = 14.sp)
-        LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 6.dp), color = Accent)
-        OutlinedButton(onClick = { vm.cancelDubbing() }) { Text("Huỷ lồng tiếng") }
-    } ?: Button(
-        onClick = {
-            if (Build.VERSION.SDK_INT >= 33) notify.launch(Manifest.permission.POST_NOTIFICATIONS)
-            settings.originalVolume = original
-            vm.startDubbing(language, voiceName, original)
-            onStarted()
-        },
-        enabled = clip != null && voices.isNotEmpty(),
-        colors = ButtonDefaults.buttonColors(containerColor = Accent),
-        modifier = Modifier.fillMaxWidth(),
-    ) { Text("Bắt đầu lồng tiếng") }
-    Text("Chạy nền kể cả khi tắt màn hình; xem tiến trình trên thanh thông báo.", color = TextDim, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
 }
 
 private fun missingModels(context: Context, mode: DubMode, s: DubSettings): List<DubModel> = buildList {
