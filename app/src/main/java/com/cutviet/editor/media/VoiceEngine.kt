@@ -2,19 +2,27 @@ package com.cutviet.editor.media
 
 import android.content.Context
 import android.media.MediaMetadataRetriever
-import android.os.Bundle
-import android.speech.tts.TextToSpeech
-import android.speech.tts.UtteranceProgressListener
-import android.speech.tts.Voice
+import android.media.MediaPlayer
 import androidx.compose.runtime.mutableStateOf
-import kotlinx.coroutines.CompletableDeferred
+import com.cutviet.editor.media.tts.PiperTts
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
-import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.abs
 import kotlin.math.max
 
-/** Vietnamese text-to-speech using the voices installed on the phone (Google TTS, Samsung TTS…). */
+/**
+ * Vietnamese text-to-speech with the voices bundled in the app (Hoài My, Nam Minh: [PiperTts]),
+ * offline, reading English words inside Vietnamese text in the same voice. The phone's own TTS
+ * voices are no longer used (the owner did not like them, 2026-11-15).
+ */
 class VoiceEngine(context: Context) {
     private val appContext = context.applicationContext
 
@@ -28,150 +36,102 @@ class VoiceEngine(context: Context) {
     val status = mutableStateOf(Status.LOADING)
     val voices = mutableStateOf<List<VoiceOption>>(emptyList())
 
-    private val pending = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
-    private var tts: TextToSpeech? = null
+    private val tts = PiperTts.get(appContext)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var previewJob: Job? = null
+    private var player: MediaPlayer? = null
 
     /** Measured syllables per second at rate 1.0, per voice; refined after every synthesis. */
-    private val calibration = HashMap<String, Double>()
+    private val calibration = ConcurrentHashMap<String, Double>()
 
     init {
-        tts = TextToSpeech(appContext) { s ->
-            if (s != TextToSpeech.SUCCESS) {
-                status.value = Status.FAILED
-                return@TextToSpeech
-            }
-            val engine = tts ?: return@TextToSpeech
-            engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                override fun onStart(utteranceId: String?) {}
-                override fun onDone(utteranceId: String?) {
-                    utteranceId?.let { pending.remove(it)?.complete(true) }
-                }
-
-                @Deprecated("Deprecated in Java")
-                override fun onError(utteranceId: String?) {
-                    utteranceId?.let { pending.remove(it)?.complete(false) }
-                }
-
-                override fun onError(utteranceId: String?, errorCode: Int) {
-                    utteranceId?.let { pending.remove(it)?.complete(false) }
-                }
-            })
-            val vi = Locale("vi", "VN")
-            val available = engine.isLanguageAvailable(vi)
-            if (available < TextToSpeech.LANG_AVAILABLE) {
-                status.value = Status.NO_VIETNAMESE
-                return@TextToSpeech
-            }
-            engine.language = vi
-            val list = runCatching { engine.voices }.getOrNull().orEmpty()
-                .filter { it.locale.language == "vi" && !it.features.orEmpty().contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED) }
-                .sortedWith(compareBy<Voice>({ it.isNetworkConnectionRequired }, { it.name }))
-            voices.value = list.mapIndexed { i, v ->
-                VoiceOption(
-                    name = v.name,
-                    label = "Giọng ${i + 1}" + if (v.isNetworkConnectionRequired) " (online)" else "",
-                    needsNetwork = v.isNetworkConnectionRequired,
-                )
-            }.ifEmpty { listOf(VoiceOption(name = "", label = "Giọng mặc định", needsNetwork = false)) }
-            status.value = Status.READY
+        scope.launch(Dispatchers.IO) {
+            val ok = tts.prepare()
+            if (ok) voices.value = PiperTts.MODELS.map { VoiceOption(it.id, it.label, needsNetwork = false) }
+            status.value = if (ok) Status.READY else Status.FAILED
         }
     }
 
-    private fun apply(voiceName: String?, pitch: Float, rate: Float) {
-        val engine = tts ?: return
-        if (!voiceName.isNullOrEmpty()) {
-            engine.voices?.firstOrNull { it.name == voiceName }?.let { engine.voice = it }
-        } else {
-            engine.language = Locale("vi", "VN")
-        }
-        engine.setPitch(pitch)
-        engine.setSpeechRate(rate)
-    }
-
+    /** Plays [text] (synthesized first, so the preview sounds exactly like the result). */
     fun speak(text: String, voiceName: String?, pitch: Float, rate: Float) {
-        val engine = tts ?: return
-        apply(voiceName, pitch, rate)
-        // Text longer than the engine takes at once is queued piece by piece.
-        splitForEngine(text, maxInputLength).forEachIndexed { i, part ->
-            engine.speak(part, if (i == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, "preview$i")
+        stop()
+        previewJob = scope.launch {
+            val f = File(appContext.cacheDir, "voice_preview.wav")
+            synthesize(text, voiceName, pitch, rate, f) ?: return@launch
+            withContext(Dispatchers.Main) {
+                player = MediaPlayer().apply {
+                    setDataSource(f.absolutePath)
+                    setOnCompletionListener { it.release(); if (player === it) player = null }
+                    prepare()
+                    start()
+                }
+            }
         }
     }
 
     fun stop() {
-        tts?.stop()
+        previewJob?.cancel()
+        previewJob = null
+        val p = player
+        player = null
+        scope.launch(Dispatchers.Main) { runCatching { p?.stop(); p?.release() } }
     }
-
-    /** Most characters the engine takes in one request; longer text is split ([splitForEngine]). */
-    val maxInputLength: Int
-        get() = runCatching { TextToSpeech.getMaxSpeechInputLength() }.getOrDefault(4000) - 50
 
     /**
      * Synthesizes [text] of any length into a WAV file and returns its exact duration in ms, or null
-     * on failure. Text over the engine's limit is read piece by piece (split between sentences) and
-     * the pieces are joined into one WAV. Must be called from a coroutine.
+     * on failure. Runs off the main thread; cancelling the coroutine stops it between sentences.
      */
     suspend fun synthesize(text: String, voiceName: String?, pitch: Float, rate: Float, out: File): Long? {
-        if (status.value != Status.READY || text.isBlank()) return null
-        val parts = splitForEngine(text, maxInputLength)
-        val ms = if (parts.size == 1) {
-            synthesizeOne(parts[0], voiceName, pitch, rate, out)
-        } else {
-            val pieces = parts.mapIndexed { i, _ -> File(out.parentFile, "${out.nameWithoutExtension}_part$i.wav") }
-            try {
-                for (i in parts.indices) {
-                    synthesizeOne(parts[i], voiceName, pitch, rate, pieces[i]) ?: return null
-                }
-                WavConcat.join(pieces, out)
-            } finally {
-                pieces.forEach { it.delete() }
-            }
+        if (text.isBlank()) return null
+        if (status.value == Status.LOADING) withTimeoutOrNull(30_000) { while (status.value == Status.LOADING) delay(50) }
+        if (status.value != Status.READY) return null
+        val id = resolve(voiceName)
+        val ms = withContext(Dispatchers.Default) {
+            runCatching { tts.synthesize(id, text, rate, pitch, out) }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }.getOrNull()
         } ?: return null
+        if (ms <= 0) return null
         // Learn this voice's real speed so the instant estimate gets closer each time.
         val syllables = syllableCount(text)
         val speechSec = ms / 1000.0 * rate - pauseSeconds(text)
-        if (syllables >= 3 && speechSec > 0.3) calibration[voiceName.orEmpty()] = syllables / speechSec
+        if (syllables >= 3 && speechSec > 0.3) calibration[id] = syllables / speechSec
         return ms
-    }
-
-    private suspend fun synthesizeOne(text: String, voiceName: String?, pitch: Float, rate: Float, out: File): Long? {
-        val engine = tts ?: return null
-        val id = "u" + System.nanoTime()
-        val done = CompletableDeferred<Boolean>()
-        pending[id] = done
-        synchronized(this) {
-            apply(voiceName, pitch, rate)
-            out.parentFile?.mkdirs()
-            val r = engine.synthesizeToFile(text, Bundle(), out, id)
-            if (r != TextToSpeech.SUCCESS) {
-                pending.remove(id)
-                return null
-            }
-        }
-        val ok = withTimeoutOrNull(120_000) { done.await() } ?: false
-        if (!ok || !out.exists() || out.length() < 100) return null
-        return durationOf(out)
     }
 
     /** Instant estimate of the spoken length in ms (before synthesizing). */
     fun estimateMs(text: String, voiceName: String?, rate: Float): Long {
         val syllables = syllableCount(text)
         if (syllables == 0) return 0
-        val sps = calibration[voiceName.orEmpty()] ?: DEFAULT_SYLLABLES_PER_SECOND
+        val sps = calibration[resolve(voiceName)] ?: PIPER_SYLLABLES_PER_SECOND
         val seconds = (syllables / sps + pauseSeconds(text)) / max(0.1f, rate)
         return (seconds * 1000).toLong()
     }
 
+    /** Stops a preview. The voices stay loaded for the whole app (they are shared, see [PiperTts.get]). */
     fun shutdown() {
-        pending.values.forEach { it.complete(false) }
-        pending.clear()
-        tts?.stop()
-        tts?.shutdown()
-        tts = null
+        stop()
     }
 
     companion object {
         /** Typical Vietnamese TTS speed at rate 1.0 (one word = one syllable in Vietnamese). */
         const val DEFAULT_SYLLABLES_PER_SECOND = 4.3
+        /** Hoài My / Nam Minh at rate 1.0, measured on a long sentence (5.4–5.5). */
+        const val PIPER_SYLLABLES_PER_SECOND = 5.4
+
+        /** A bundled voice id for [name]: itself, or Hoài My for empty names and the old phone voices. */
+        fun resolve(name: String?): String = PiperTts.MODELS.firstOrNull { it.id == name }?.id ?: PiperTts.FEMALE
+
+        /**
+         * The voice and pitch the offline dub reads a line with. Dub lines carry a pitch that stands
+         * for who speaks ([com.cutviet.editor.media.dubbing.DubbingPipeline.pitchFor]: 0.78 man,
+         * 1.05 woman, 1.3 child); with real male and female voices that becomes Nam Minh or Hoài My
+         * at their own pitch, and a child is Hoài My raised.
+         */
+        fun dubVoice(name: String?, pitch: Float): Pair<String, Float> = when {
+            abs(pitch - 0.78f) < 0.005f -> PiperTts.MALE to 1f
+            abs(pitch - 1.05f) < 0.005f -> PiperTts.FEMALE to 1f
+            abs(pitch - 1.3f) < 0.005f -> PiperTts.FEMALE to 1.25f
+            else -> resolve(name) to pitch
+        }
 
         val STYLES = listOf(
             Style("Tự nhiên", 1.0f),

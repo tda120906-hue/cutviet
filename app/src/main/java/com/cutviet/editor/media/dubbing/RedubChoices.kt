@@ -15,7 +15,7 @@ data class VoiceChoice(val label: String, val speaker: String?, val voice: LineV
 /** What the line editor offers for one DUB track. */
 object RedubChoices {
     const val GROUP_CURRENT = "Đang dùng"
-    const val GROUP_PHONE = "Giọng của máy (không cần mạng)"
+    const val GROUP_PHONE = "Giọng có sẵn trong app (không cần mạng)"
 
     /**
      * The line's own voice first, then every Gemini voice by name (women, men, children), then the
@@ -35,7 +35,7 @@ object RedubChoices {
         for (g in Gender.entries) {
             val v = LineVoice(null, g, emotion = current.emotion, pitch = DubbingPipeline.pitchFor(g))
             if (current.gemini == null && current.gender == g) continue
-            out += VoiceChoice("Giọng máy · ${g.label}", null, v, GROUP_PHONE)
+            out += VoiceChoice("${offlineName(g)} · ${g.label}", null, v, GROUP_PHONE)
         }
         return out
     }
@@ -43,11 +43,18 @@ object RedubChoices {
     /** Lines read in the same voice share this key (a Gemini voice, or the phone's at one pitch). */
     fun voiceKey(v: LineVoice): String = v.gemini?.let { "$it/${v.gender ?: ""}" } ?: "phone/${v.gender ?: ""}/${v.pitch}"
 
-    /** "Nữ · rõ ràng, chắc giọng (Kore)", "Charon", "giọng máy · Nam". */
+    /** The bundled voice that reads a man's, woman's or child's line ([VoiceEngine.dubVoice]). */
+    fun offlineName(g: Gender?): String = when (g) {
+        Gender.MALE -> "Nam Minh"
+        Gender.CHILD -> "Hoài My (cao giọng)"
+        else -> "Hoài My"
+    }
+
+    /** "Nữ · rõ ràng, chắc giọng (Kore)", "Charon", "Nam Minh · Nam". */
     fun describe(v: LineVoice): String {
         VoicePresets.of(v)?.let { return it.label }
         if (v.gemini != null) return listOfNotNull(v.gender?.label, v.gemini).joinToString(" · ")
-        return listOfNotNull("giọng máy", v.gender?.label).joinToString(" · ")
+        return listOfNotNull(if (v.gender == null) "giọng có sẵn" else offlineName(v.gender), v.gender?.label).joinToString(" · ")
     }
 
     /**
