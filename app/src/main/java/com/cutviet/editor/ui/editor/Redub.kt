@@ -75,6 +75,29 @@ fun RedubDialog(vm: EditorViewModel, trackId: String, onDismiss: () -> Unit) {
                 TextButton(onClick = onDismiss) { Text("Đóng", color = Accent) }
             }
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp)) {
+                // Action buttons first (owner, 2026-11-15); the text box and voice list below feed them.
+                vm.redubStatus?.let {
+                    Text(it, color = Color.White, fontSize = 13.sp, modifier = Modifier.padding(bottom = 4.dp))
+                    TextButton(onClick = { vm.cancelRedub() }) { Text("Huỷ", color = Accent) }
+                }
+                Button(
+                    onClick = { vm.startRedub(trackId, text, choice, language, allSameVoice) },
+                    enabled = text.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                ) { Text("Đọc lại lời đã sửa") }
+                Text(
+                    "Đọc đúng lời ở ô bên dưới, chỉ tạo lại giọng (dùng khi dịch sai vài chữ hay muốn đổi giọng).",
+                    color = TextDim, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
+                )
+                OutlinedButton(
+                    onClick = { vm.startRedub(trackId, null, choice, language, allSameVoice) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Nghe & dịch lại từ video", color = Color.White) }
+                Text(
+                    "AI nghe lại đúng đoạn video của câu này và dịch lại theo ngữ cảnh các câu trước và sau, rồi đọc bằng giọng đã chọn.",
+                    color = TextDim, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
+                )
                 Text(
                     "Câu ở ${formatTime(track.startMs)}, dài ${formatTime(info.sourceEndMs - info.sourceStartMs)} trong video" +
                         (info.speaker?.let { " · $it" } ?: ""),
@@ -100,25 +123,6 @@ fun RedubDialog(vm: EditorViewModel, trackId: String, onDismiss: () -> Unit) {
                     color = TextDim, fontSize = 12.sp,
                 )
 
-                Spacer(Modifier.height(16.dp))
-                Button(
-                    onClick = { vm.startRedub(trackId, text, choice, language, allSameVoice) },
-                    enabled = text.isNotBlank(),
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = Accent),
-                ) { Text("Đọc lại lời đã sửa") }
-                Text(
-                    "Giữ nguyên lời ở trên, chỉ tạo lại giọng (dùng khi dịch sai vài chữ hay muốn đổi giọng).",
-                    color = TextDim, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
-                )
-                OutlinedButton(
-                    onClick = { vm.startRedub(trackId, null, choice, language, allSameVoice) },
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Nghe & dịch lại từ video", color = Color.White) }
-                Text(
-                    "AI nghe lại đúng đoạn video của câu này và dịch lại theo ngữ cảnh các câu trước và sau, rồi đọc bằng giọng đã chọn.",
-                    color = TextDim, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
-                )
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = { vm.splitDub(trackId) }, modifier = Modifier.weight(1f)) {
                         Text("Tách câu ở đầu phát", color = Color.White, fontSize = 13.sp)
@@ -131,10 +135,6 @@ fun RedubDialog(vm: EditorViewModel, trackId: String, onDismiss: () -> Unit) {
                     "Tách: đưa đầu phát (vạch trắng) tới chỗ cần cắt trên timeline rồi bấm; mỗi nửa giữ phần lời tương ứng và lồng lại riêng được. Xoá: bỏ hẳn câu này, Hoàn tác để lấy lại.",
                     color = TextDim, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp),
                 )
-                vm.redubStatus?.let {
-                    Text(it, color = Color.White, fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
-                    TextButton(onClick = { vm.cancelRedub() }) { Text("Huỷ", color = Accent) }
-                }
             }
         }
     }
