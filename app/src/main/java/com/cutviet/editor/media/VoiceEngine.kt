@@ -164,14 +164,14 @@ class VoiceEngine(context: Context) {
         fun syllableCount(text: String): Int =
             text.split(Regex("[\\s\\p{Punct}…“”‘’–—]+")).count { w -> w.any { it.isLetterOrDigit() } }
 
-        /** Time the engine pauses on punctuation at rate 1.0. */
+        /** Time the voice pauses on punctuation at rate 1.0 ([com.cutviet.editor.media.tts.PiperTts.Pause]). */
         fun pauseSeconds(text: String): Double {
             var s = 0.0
             for (ch in text) {
                 s += when (ch) {
-                    ',', ';', ':' -> 0.25
-                    '.', '!', '?', '…' -> 0.45
-                    '\n' -> 0.35
+                    ',', ';', ':' -> 0.12
+                    '.', '!', '?', '…' -> 0.25
+                    '\n' -> 0.25
                     else -> 0.0
                 }
             }

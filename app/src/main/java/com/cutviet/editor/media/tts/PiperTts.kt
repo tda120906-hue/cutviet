@@ -36,6 +36,11 @@ import kotlin.math.sin
 class PiperTts private constructor(private val context: Context) {
     data class Model(val id: String, val label: String)
 
+    /** Pause after a clause, by its punctuation (at rate 1; shorter when read faster). */
+    enum class Pause(val seconds: Double) { NONE(0.04), COMMA(0.12), SENTENCE(0.25) }
+
+    class Piece(val phonemes: List<String>, val pause: Pause)
+
     private class Loaded(val session: OrtSession, val ids: Map<String, Int>, val noise: Float, val length: Float, val noiseW: Float, val rate: Int)
 
     private val dir = File(context.noBackupFilesDir, "tts")
@@ -98,10 +103,10 @@ class PiperTts private constructor(private val context: Context) {
         ).also { loaded[id] = it }
     }
 
-    /** Sentences of [text] as Piper phonemes (one String per phoneme), English made Vietnamese. */
-    fun phonemes(text: String): List<List<String>> {
+    /** Clauses of [text] as Piper phonemes (one String per phoneme), English made Vietnamese. */
+    fun clausesOf(text: String): List<Piece> {
         val raw = EspeakNative.phonemize("vi", cleanText(text).toByteArray(Charsets.UTF_8)) ?: return emptyList()
-        return sentences(raw)
+        return clauses(raw)
     }
 
     /**
@@ -111,24 +116,38 @@ class PiperTts private constructor(private val context: Context) {
     suspend fun synthesize(id: String, text: String, rate: Float, pitch: Float, out: File): Long? {
         if (!prepare()) return null
         val m = model(id)
-        val sentences = phonemes(text).flatMap { chunk(it) }
-        if (sentences.isEmpty()) return null
+        val pieces = clausesOf(text).flatMap { c ->
+            val parts = chunk(c.phonemes)
+            parts.mapIndexed { i, ph -> Piece(ph, if (i == parts.lastIndex) c.pause else Pause.NONE) }
+        }
+        if (pieces.isEmpty()) return null
+        val r = rate.coerceIn(0.25f, 4f)
         val p = pitch.coerceIn(0.5f, 2f)
-        val lengthScale = m.length / rate.coerceIn(0.25f, 4f) * p
+        val lengthScale = m.length / r * p
         out.parentFile?.mkdirs()
         var samples = 0L
-        val gap = ShortArray((m.rate * SENTENCE_GAP_S).toInt())
+        var gain: Float? = null
         RandomAccessFile(out, "rw").use { w ->
             w.setLength(0)
             w.write(WavConcat.header(1, m.rate, 0))
-            sentences.forEachIndexed { i, ph ->
+            pieces.forEachIndexed { i, piece ->
                 currentCoroutineContext().ensureActive()
-                val ids = ids(ph, m.ids)
+                val ids = ids(piece.phonemes, m.ids)
                 var audio = infer(m, ids, lengthScale) ?: return null
                 if (abs(p - 1f) > 0.01f) audio = resample(audio, p.toDouble())
-                val pcm = toPcm(audio)
-                if (i > 0) { w.write(bytes(gap)); samples += gap.size }
+                // Each clause is read on its own and its silences cut, so the pause at a comma or a
+                // full stop is the one set here (shorter at a faster rate), not the model's long one.
+                val voiced = trimSilence(audio, m.rate)
+                // One loudness for the whole text (set by the first clause, lowered only to avoid clipping).
+                var peak = 0f
+                for (x in voiced) peak = max(peak, abs(x))
+                if (peak > 1e-4f) gain = min(gain ?: (0.95f / peak), 0.99f / peak)
+                val pcm = toPcm(voiced, gain ?: 1f)
                 w.write(bytes(pcm)); samples += pcm.size
+                if (i < pieces.lastIndex) {
+                    val gap = ShortArray((m.rate * piece.pause.seconds / r).toInt())
+                    w.write(bytes(gap)); samples += gap.size
+                }
             }
             w.seek(0)
             w.write(WavConcat.header(1, m.rate, samples * 2))
@@ -164,7 +183,72 @@ class PiperTts private constructor(private val context: Context) {
 
     companion object {
         private const val TAG = "CutVietTts"
-        const val SENTENCE_GAP_S = 0.15
+        /**
+         * espeak's clauses as single phonemes, each with the pause after it. Like Piper 1.3 the
+         * punctuation stays in (it shapes the melody), every character is split into code points after
+         * NFD (tone marks and diacritics are their own phoneme).
+         */
+        fun clauses(raw: String): List<Piece> {
+            val out = ArrayList<Piece>()
+            for (clause in raw.split('\u0002')) {
+                val parts = clause.split('\u0001')
+                val ph = EnglishInVietnamese.convertClause(parts[0]) + parts.getOrElse(1) { "" }
+                val list = codePoints(ph)
+                if (list.none { it.isNotBlank() && it !in PUNCTUATION }) continue
+                val term = parts.getOrElse(1) { "" }
+                val pause = when {
+                    parts.getOrElse(2) { "0" } == "1" -> Pause.SENTENCE
+                    term == "," || term == ":" || term == ";" -> Pause.COMMA
+                    else -> Pause.NONE
+                }
+                out += Piece(list, pause)
+            }
+            return out
+        }
+
+        private val PUNCTUATION = setOf(".", ",", "?", "!", ":", ";")
+
+        private fun codePoints(s: String): List<String> {
+            val nfd = Normalizer.normalize(s, Normalizer.Form.NFD)
+            val out = ArrayList<String>()
+            var i = 0
+            while (i < nfd.length) {
+                val cp = nfd.codePointAt(i)
+                out += String(Character.toChars(cp))
+                i += Character.charCount(cp)
+            }
+            return out
+        }
+
+        /** [audio] without the near-silence before and after the voice (20 ms kept, with a short fade). */
+        fun trimSilence(audio: FloatArray, rate: Int): FloatArray {
+            var peak = 0f
+            for (a in audio) peak = max(peak, abs(a))
+            if (peak < 1e-4f) return FloatArray(0)
+            val thr = peak * 0.01f // −40 dB
+            val win = rate / 100
+            fun loud(start: Int): Boolean {
+                var e = 0.0
+                val end = min(audio.size, start + win)
+                for (k in start until end) e += audio[k] * audio[k]
+                return kotlin.math.sqrt(e / max(1, end - start)) > thr
+            }
+            var a = 0
+            while (a < audio.size && !loud(a)) a += win
+            var b = audio.size
+            while (b > a && !loud(max(a, b - win))) b -= win
+            val keep = rate / 50
+            val from = max(0, a - keep)
+            val to = min(audio.size, b + keep)
+            val out = audio.copyOfRange(from, to)
+            val fade = min(rate / 200, out.size / 2)
+            for (k in 0 until fade) {
+                val g = k.toFloat() / fade
+                out[k] *= g
+                out[out.size - 1 - k] *= g
+            }
+            return out
+        }
 
         val MODELS = listOf(
             Model("hoaimy", "Hoài My (nữ)"),
@@ -183,7 +267,7 @@ class PiperTts private constructor(private val context: Context) {
 
         /**
          * Text the voice should read: emoji and other symbols removed (espeak would read their names),
-         * "OK" said the Vietnamese way.
+         * a space after every punctuation mark, "OK" said the Vietnamese way.
          */
         fun cleanText(text: String): String {
             val nfc = Normalizer.normalize(text, Normalizer.Form.NFC)
@@ -197,38 +281,13 @@ class PiperTts private constructor(private val context: Context) {
                 if (drop) sb.append(' ') else sb.appendCodePoint(cp)
                 i += Character.charCount(cp)
             }
-            return sb.toString().replace(Regex("(?<!\\p{L})(?i:ok|okay|oke)(?!\\p{L})"), "ô kê")
-        }
-
-        /**
-         * espeak's clauses ("phonemes\u0001terminator\u0001eos" joined by \u0002) grouped into sentences
-         * of single phonemes, as Piper 1.3 does it: punctuation kept, a space after , : ; and every
-         * character split into code points after NFD (tone marks and diacritics become their own phoneme).
-         */
-        fun sentences(raw: String): List<List<String>> {
-            val all = ArrayList<List<String>>()
-            var cur = ArrayList<String>()
-            for (clause in raw.split('\u0002')) {
-                val parts = clause.split('\u0001')
-                if (parts.isEmpty()) continue
-                var ph = EnglishInVietnamese.convertClause(parts[0])
-                val term = parts.getOrElse(1) { "" }
-                ph += term
-                if (term == "," || term == ":" || term == ";") ph += " "
-                val nfd = Normalizer.normalize(ph, Normalizer.Form.NFD)
-                var i = 0
-                while (i < nfd.length) {
-                    val cp = nfd.codePointAt(i)
-                    cur += String(Character.toChars(cp))
-                    i += Character.charCount(cp)
-                }
-                if (parts.getOrElse(2) { "0" } == "1") {
-                    if (cur.isNotEmpty()) all += cur
-                    cur = ArrayList()
-                }
-            }
-            if (cur.isNotEmpty()) all += cur
-            return all.filter { s -> s.any { it.isNotBlank() && it !in setOf(".", ",", "?", "!", ":", ";") } }
+            return sb.toString()
+                // "…" and "..." are a pause, not silence-less run-on text.
+                .replace(Regex("(…|\\.{2,})"), ". ")
+                // espeak reads a full stop glued to the next word as the word "chấm" (it takes it for
+                // "video.mp4"), and drops a comma glued to the next word: always leave a space.
+                .replace(Regex("\\s*([.,!?;:])(?=\\p{L})"), "$1 ")
+                .replace(Regex("(?<!\\p{L})(?i:ok|okay|oke)(?!\\p{L})"), "ô kê")
         }
 
         /** A sentence longer than [MAX_PHONEMES], cut after a comma or a space near the limit. */
@@ -262,13 +321,9 @@ class PiperTts private constructor(private val context: Context) {
             return out.toLongArray()
         }
 
-        /** Peak-normalised like Piper (to 0.95 here, a little headroom) and turned into 16-bit samples. */
-        fun toPcm(audio: FloatArray): ShortArray {
-            var peak = 0f
-            for (a in audio) peak = max(peak, abs(a))
-            val g = if (peak < 1e-4f) 0f else 0.95f / peak
-            return ShortArray(audio.size) { (audio[it] * g * 32767f).roundToInt().coerceIn(-32768, 32767).toShort() }
-        }
+        /** [audio] times [gain] as 16-bit samples. */
+        fun toPcm(audio: FloatArray, gain: Float): ShortArray =
+            ShortArray(audio.size) { (audio[it] * gain * 32767f).roundToInt().coerceIn(-32768, 32767).toShort() }
 
         /**
          * Plays [x] [factor] times faster (windowed-sinc interpolation, low-passed when shrinking so
