@@ -102,7 +102,7 @@ class LineDubber(private val context: Context, private val workDir: File, privat
             }
             val phone = spoken == null
             if (spoken == null) spoken = phoneVoice(text, slot, room, r.voice.pitch, r.phoneVoice)
-                ?: throw StepUnavailableException("Giọng đọc của máy không đọc được câu này")
+                ?: throw StepUnavailableException("Giọng đọc có sẵn trong app không đọc được câu này")
             progress(Step.SPEAK, 1f)
             // Longer than its time: played faster, up to the user's limit (TTS rate included).
             // Shorter than its sentence: a little slower, so it lasts as long as the mouth moves.
@@ -185,12 +185,13 @@ class LineDubber(private val context: Context, private val workDir: File, privat
 
     /** The phone's voice, fitted to the line's time like a full dub. */
     private suspend fun phoneVoice(text: String, slotMs: Long, roomMs: Long, pitch: Float, name: String?): Spoken? {
-        // English words respelled for the Vietnamese voice; the track keeps the text as written.
-        val line = SpeakableText.forPhone(text)
+        // The bundled voices read English words inside Vietnamese themselves.
+        val line = text
+        val (id, p) = VoiceEngine.dubVoice(name, pitch)
         val files = HashMap<Float, File>()
-        val fit = AudioFitter.fit(voice.estimateMs(line, name, 1f), slotMs, roomMs) { rate ->
+        val fit = AudioFitter.fit(voice.estimateMs(line, id, 1f), slotMs, roomMs) { rate ->
             val f = File(workDir, "line_phone_${(rate * 1000).toInt()}.wav")
-            voice.synthesize(line, name, pitch, rate, f)?.let { ms -> WavTrim.trim(f) ?: ms }?.also { files[rate] = f }
+            voice.synthesize(line, id, p, rate, f)?.let { ms -> WavTrim.trim(f) ?: ms }?.also { files[rate] = f }
         } ?: return null
         val file = files[fit.rate] ?: return null
         files.values.filter { it != file }.forEach { it.delete() }

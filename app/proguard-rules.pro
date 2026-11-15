@@ -13,3 +13,5 @@
 -keep class com.google.protobuf.** { *; }
 -dontwarn com.google.mediapipe.**
 -dontwarn com.google.protobuf.**
+# Called from espeak_jni.cpp by name.
+-keep class com.cutviet.editor.media.tts.EspeakNative { native <methods>; }

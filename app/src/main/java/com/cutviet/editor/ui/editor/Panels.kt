@@ -788,7 +788,8 @@ private fun VoicePanel(vm: EditorViewModel) {
     val startMs = editing?.startMs ?: vm.playheadMs
     val status = engine.status.value
     val voices = engine.voices.value
-    if (voiceName == null && voices.isNotEmpty()) voiceName = voices.first().name.ifEmpty { null }
+    // Voice-overs made with the phone's old voices open on Hoài My.
+    if (voices.isNotEmpty() && voices.none { it.name == voiceName }) voiceName = VoiceEngine.resolve(voiceName)
 
     val estimate = remember(text, voiceName, rate, exactMs) { engine.estimateMs(text, voiceName, rate) }
     val lengthMs = exactMs ?: estimate
@@ -815,33 +816,14 @@ private fun VoicePanel(vm: EditorViewModel) {
 
     when (status) {
         VoiceEngine.Status.LOADING -> {
-            Text("Đang khởi động bộ đọc tiếng Việt…", color = TextDim)
+            Text("Đang nạp giọng đọc (lần đầu sau khi cài mất vài giây)…", color = TextDim)
             return
         }
         VoiceEngine.Status.NO_VIETNAMESE, VoiceEngine.Status.FAILED -> {
             Text(
-                "Điện thoại chưa có giọng đọc tiếng Việt. Hãy cài \"Dịch vụ lời nói của Google\" (Speech Services by Google) " +
-                    "và tải dữ liệu tiếng Việt, rồi mở lại mục này.",
+                "Không nạp được giọng đọc có sẵn (Hoài My, Nam Minh). Hãy đóng hẳn app rồi mở lại; nếu vẫn lỗi, cài lại bản APK mới nhất.",
                 color = Color.White, fontSize = 13.sp,
             )
-            Row(Modifier.padding(top = 8.dp)) {
-                OutlinedButton(onClick = {
-                    runCatching {
-                        context.startActivity(
-                            android.content.Intent(android.speech.tts.TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA)
-                                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
-                        )
-                    }
-                }) { Text("Tải giọng tiếng Việt") }
-                Spacer(Modifier.width(8.dp))
-                OutlinedButton(onClick = {
-                    runCatching {
-                        context.startActivity(
-                            android.content.Intent("com.android.settings.TTS_SETTINGS").addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
-                        )
-                    }
-                }) { Text("Cài đặt giọng nói") }
-            }
             return
         }
         VoiceEngine.Status.READY -> Unit
@@ -892,7 +874,7 @@ private fun VoicePanel(vm: EditorViewModel) {
         }
     }
 
-    Text("Giọng đọc tiếng Việt", color = Color.White, fontSize = 13.sp)
+    Text("Giọng đọc tiếng Việt (đọc được cả từ tiếng Anh chêm vào)", color = Color.White, fontSize = 13.sp)
     Row(Modifier.horizontalScroll(rememberScrollState())) {
         voices.forEach { v ->
             Chip(v.label, (voiceName ?: "") == v.name) { voiceName = v.name.ifEmpty { null } }

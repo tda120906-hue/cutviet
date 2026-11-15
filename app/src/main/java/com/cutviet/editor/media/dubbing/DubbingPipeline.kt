@@ -215,11 +215,14 @@ class DubbingPipeline(
         return DubbedSegment(seg.startMs, seg.slotMs, seg.text, line, best.file, fit.durationMs, fit.rate)
     }
 
-    /** What the phone's voice reads for [line]: its English words respelled the Vietnamese way ([SpeakableText]). */
+    /**
+     * What the offline voice reads for [line]: the line itself. The bundled voices (Hoài My, Nam Minh)
+     * read English words inside Vietnamese by themselves ([com.cutviet.editor.media.tts.EnglishInVietnamese]),
+     * so the respelling the phone's voice needed ([SpeakableText]) is no longer used.
+     */
+    @Suppress("UNUSED_PARAMETER", "RedundantSuspendModifier")
     private suspend fun reading(index: Int, line: String): String {
-        val out = SpeakableText.forPhone(line) { translator.speakable(it) }
-        if (out != line) DubLog.i(TAG, "segment $index read as \"${out.take(80)}\"")
-        return out
+        return line
     }
 
     private class Rendered(val file: File, val fit: AudioFitter.Fit)
@@ -227,9 +230,10 @@ class DubbingPipeline(
     /** Closed-loop synthesis of [line]; the engine's silence before and after is cut off. */
     private suspend fun render(index: Int, take: Int, line: String, slotMs: Long, roomMs: Long, s: Settings): Rendered? {
         val files = HashMap<Float, File>()
-        val fit = AudioFitter.fit(voice.estimateMs(line, s.voiceName, 1f), slotMs, roomMs) { rate ->
+        val (name, pitch) = VoiceEngine.dubVoice(s.voiceName, s.pitch)
+        val fit = AudioFitter.fit(voice.estimateMs(line, name, 1f), slotMs, roomMs) { rate ->
             val f = File(workDir, "seg_${index}_${take}_${(rate * 1000).toInt()}.wav")
-            voice.synthesize(line, s.voiceName, s.pitch, rate, f)?.let { ms -> WavTrim.trim(f) ?: ms }?.also { files[rate] = f }
+            voice.synthesize(line, name, pitch, rate, f)?.let { ms -> WavTrim.trim(f) ?: ms }?.also { files[rate] = f }
         } ?: return null
         val file = files[fit.rate] ?: return null
         files.values.filter { it != file }.forEach { it.delete() }
@@ -239,10 +243,11 @@ class DubbingPipeline(
     /** Syllables per second of the chosen voice at rate 1.0, measured on a test sentence. */
     private suspend fun voiceSpeed(s: Settings): Double {
         val f = File(workDir, "calibrate.wav")
-        val ms = voice.synthesize(CALIBRATION, s.voiceName, s.pitch, 1f, f)?.let { ms -> WavTrim.trim(f) ?: ms }
+        val (name, pitch) = VoiceEngine.dubVoice(s.voiceName, s.pitch)
+        val ms = voice.synthesize(CALIBRATION, name, pitch, 1f, f)?.let { ms -> WavTrim.trim(f) ?: ms }
         f.delete()
         val seconds = (ms ?: 0) / 1000.0 - VoiceEngine.pauseSeconds(CALIBRATION)
-        val sps = if (seconds < 1.0) VoiceEngine.DEFAULT_SYLLABLES_PER_SECOND
+        val sps = if (seconds < 1.0) VoiceEngine.PIPER_SYLLABLES_PER_SECOND
         else (VoiceEngine.syllableCount(CALIBRATION) / seconds).coerceIn(2.5, 7.0)
         DubLog.i(TAG, "voice speed ${"%.2f".format(sps)} syllables/s (test sentence ${ms} ms)")
         return sps

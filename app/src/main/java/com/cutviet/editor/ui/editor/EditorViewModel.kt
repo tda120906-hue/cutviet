@@ -661,7 +661,7 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
             val ms = voice.synthesize(spec.text, spec.voiceName, spec.pitch, spec.rate, file)
             busy = false
             if (ms == null || ms <= 0) {
-                toast = "Không tạo được giọng đọc. Kiểm tra giọng tiếng Việt trong cài đặt chuyển văn bản thành giọng nói."
+                toast = "Không tạo được giọng đọc. Thử lại, hoặc đóng hẳn app rồi mở lại."
                 onDone(false)
                 return@launch
             }

@@ -86,7 +86,7 @@ class GeminiDubber(
             }
             progress(1f)
 
-            if (stopped != null) stoppedNotice = "${lines.size - voiced.size} câu đọc bằng giọng của máy ($stopped)"
+            if (stopped != null) stoppedNotice = "${lines.size - voiced.size} câu đọc bằng giọng có sẵn trong app ($stopped)"
             return lines.mapIndexed { k, l ->
                 val r = ranges[k]
                 val v = voiced[k]

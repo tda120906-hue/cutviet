@@ -180,13 +180,13 @@ private fun DubTab(vm: EditorViewModel, settings: DubSettings, onOpenModels: () 
         )
     }
 
-    Label("Giọng tiếng Việt")
+    Label("Giọng đọc có sẵn (offline)")
     if (voices.isEmpty()) {
-        Text("Máy chưa có giọng đọc tiếng Việt. Cài Google Text-to-Speech và tải giọng tiếng Việt.", color = Color(0xFFFF6B6B), fontSize = 13.sp)
+        Text("Đang nạp giọng đọc…", color = TextDim, fontSize = 13.sp)
     } else {
         Chips(voices, voices.firstOrNull { it.name == voiceName }, { it.label + if (it.needsNetwork) " (mạng)" else "" }) { voiceName = it.name }
         if (mode != DubMode.OFFLINE && engine == OnlineEngine.NATURAL) {
-            Text("Giọng của máy: dùng khi chạy offline, hoặc cho các câu Gemini không đọc được.", color = TextDim, fontSize = 12.sp)
+            Text("Giọng có sẵn trong app (đọc được cả từ tiếng Anh chêm): dùng khi chạy offline, hoặc cho các câu Gemini không đọc được.", color = TextDim, fontSize = 12.sp)
         }
     }
 
