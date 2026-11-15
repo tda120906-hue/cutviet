@@ -45,6 +45,16 @@ class PiperTtsTest {
     }
 
     @Test
+    fun punctuationGluedToTheNextWordGetsASpace() {
+        // Without it espeak says "chấm" for the full stop and skips the comma's pause.
+        assertEquals("Xin chào. Hôm nay, trời đẹp", PiperTts.cleanText("Xin chào.Hôm nay,trời đẹp"))
+        assertEquals("Xin chào. Hôm", PiperTts.cleanText("Xin chào .Hôm"))
+        assertEquals("Ừ.  Thôi", PiperTts.cleanText("Ừ… Thôi"))
+        // Numbers keep their point.
+        assertEquals("Giá 1.5 triệu", PiperTts.cleanText("Giá 1.5 triệu"))
+    }
+
+    @Test
     fun longSentencesAreCutAtCommas() {
         val s = (1..1000).map { if (it % 50 == 0) "," else "a" }
         val parts = PiperTts.chunk(s)

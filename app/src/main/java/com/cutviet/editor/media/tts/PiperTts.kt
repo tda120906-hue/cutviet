@@ -267,7 +267,7 @@ class PiperTts private constructor(private val context: Context) {
 
         /**
          * Text the voice should read: emoji and other symbols removed (espeak would read their names),
-         * "OK" said the Vietnamese way.
+         * a space after every punctuation mark, "OK" said the Vietnamese way.
          */
         fun cleanText(text: String): String {
             val nfc = Normalizer.normalize(text, Normalizer.Form.NFC)
@@ -281,7 +281,13 @@ class PiperTts private constructor(private val context: Context) {
                 if (drop) sb.append(' ') else sb.appendCodePoint(cp)
                 i += Character.charCount(cp)
             }
-            return sb.toString().replace(Regex("(?<!\\p{L})(?i:ok|okay|oke)(?!\\p{L})"), "ô kê")
+            return sb.toString()
+                // "…" and "..." are a pause, not silence-less run-on text.
+                .replace(Regex("(…|\\.{2,})"), ". ")
+                // espeak reads a full stop glued to the next word as the word "chấm" (it takes it for
+                // "video.mp4"), and drops a comma glued to the next word: always leave a space.
+                .replace(Regex("\\s*([.,!?;:])(?=\\p{L})"), "$1 ")
+                .replace(Regex("(?<!\\p{L})(?i:ok|okay|oke)(?!\\p{L})"), "ô kê")
         }
 
         /** A sentence longer than [MAX_PHONEMES], cut after a comma or a space near the limit. */
