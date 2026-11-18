@@ -105,9 +105,21 @@ class PiperTts private constructor(private val context: Context) {
 
     /** Clauses of [text] as Piper phonemes (one String per phoneme), English made Vietnamese. */
     fun clausesOf(text: String): List<Piece> {
-        val raw = EspeakNative.phonemize("vi", cleanText(text).toByteArray(Charsets.UTF_8)) ?: return emptyList()
+        val vietnamese = Pronunciation.respell(context, cleanText(text), ::englishIpa)
+        val raw = EspeakNative.phonemize("vi", vietnamese.toByteArray(Charsets.UTF_8)) ?: return emptyList()
         return clauses(raw)
     }
+
+    /** espeak's English pronunciation of [word] (IPA), or null before the voices are ready. */
+    fun englishIpa(word: String): String? {
+        if (!prepare()) return null
+        val raw = EspeakNative.phonemize("en", word.toByteArray(Charsets.UTF_8)) ?: return null
+        return raw.split('\u0002').joinToString(" ") { it.substringBefore('\u0001') }.trim().ifEmpty { null }
+    }
+
+    /** The English words in [text] and how the voices will read them, for the "Cách đọc" screen. */
+    fun englishReadings(text: String): List<Pronunciation.Reading> =
+        Pronunciation.readingsIn(context, cleanText(text), ::englishIpa)
 
     /**
      * Synthesizes [text] in voice [id] into a 16-bit mono WAV; returns its length in ms or null.

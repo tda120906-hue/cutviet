@@ -84,4 +84,32 @@ class EnglishInVietnameseTest {
     fun vietnameseOnlyClauseIsUnchanged() {
         assertEquals("hˈom nˈaj", EnglishInVietnamese.convertClause("hˈom nˈaj"))
     }
+
+    private val spellings = listOf(
+        "dˈɛdlaɪn" to "đét lai",
+        "smˈuːð" to "xờ mút",
+        "ˈɛdɪt" to "e đít",
+        "twˈɪst" to "tuýt",
+        "kwˈɛstʃən" to "quét chân",
+        "wˈaʊ" to "oao",
+        "wˈɪndəʊ" to "uyn đô",
+        "ɡˈeɪm" to "ghêm",
+        "ɹɪvjˈuː" to "di viu",
+        "ˈiːmeɪl" to "i meo",
+        "skwˈeə" to "xờ que",
+        "stɹˈiːm" to "xờ chim",
+        "ˈʌpdeɪt" to "ắp đết",
+        "hˈapi" to "háp pi",
+        "ˈapəl" to "áp pồ",
+        "kˈɒpɪ" to "cóp pi",
+        "ˈɒfɪs" to "óp phít",
+        "vˈɪdɪʲəʊ" to "vi đi ô",
+        "səbskɹˈaɪb" to "xấp xờ cờ dai",
+        "ˈaɪ fˈəʊn" to "ai phôn",
+    )
+
+    @Test
+    fun spelledTheVietnameseWay() {
+        for ((ipa, out) in spellings) assertEquals(ipa, out, EnglishInVietnamese.spell(ipa))
+    }
 }

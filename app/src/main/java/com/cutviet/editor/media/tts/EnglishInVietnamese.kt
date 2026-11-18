@@ -72,7 +72,8 @@ object EnglishInVietnamese {
 
     private class Syl(var onset: List<String>, var nucleus: String, var coda: List<String>, val stress: String?)
 
-    internal fun word(ipa: String): String {
+    /** [ipa] cut into syllables; between two vowels the first consonant closes the syllable before. */
+    private fun syllables(ipa: String): List<Syl> {
         val u = units(Normalizer.normalize(ipa, Normalizer.Form.NFC))
         val syls = ArrayList<Syl>()
         var cons = ArrayList<String>()
@@ -84,9 +85,8 @@ object EnglishInVietnamese {
                 x != "ʔ" -> cons += x
             }
         }
-        if (syls.isEmpty()) return ""
+        if (syls.isEmpty()) return syls
         syls.last().coda = cons
-        // Between two vowels the first consonant closes the syllable before, the rest open the next.
         for (k in 1 until syls.size) {
             val on = syls[k].onset
             if (on.size > 1) {
@@ -96,6 +96,12 @@ object EnglishInVietnamese {
                 syls[k].onset = rest.drop(1) + keep
             }
         }
+        return syls
+    }
+
+    internal fun word(ipa: String): String {
+        val syls = syllables(ipa)
+        if (syls.isEmpty()) return ""
         val out = ArrayList<String>()
         for (s in syls) {
             var on = s.onset
@@ -154,5 +160,146 @@ object EnglishInVietnamese {
         // Vietnamese "t", not the aspirated "th".
         if (on.startsWith("t") && !on.startsWith("tʃ") && !on.startsWith("t̪")) on = "t̪" + on.substring(1)
         return on + (if (stressed == null) "ˌ" else "ˈ") + n + tone + glide + c
+    }
+
+    // ---- The same sounds written in Vietnamese spelling ("dˈɛdlaɪn" → "đét lai"). ----
+    // Written out, an English word goes through espeak's Vietnamese rules like any Vietnamese word, can
+    // be shown to the user and corrected by them in the same form.
+
+    /** English IPA (one or more words) as Vietnamese spelling, syllables separated by spaces. */
+    fun spell(englishIpa: String): String =
+        englishIpa.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ") { spellWord(it) }
+            .replace(Regex("\\s+"), " ").trim()
+
+    private val SHORT = setOf("ɪ", "ɛ", "e", "æ", "ʌ", "ɒ", "ʊ", "a")
+    private val HELD = setOf("p", "t", "k", "f", "s", "θ", "tʃ")
+
+    private class Part(val onset: String, val w: Boolean, val n: String, val glide: String, val coda: String, val tone: String)
+
+    internal fun spellWord(ipa: String): String {
+        val syls = syllables(ipa)
+        if (syls.isEmpty()) return ""
+        // A short stressed vowel before p, t, k, f, s… holds that sound too, as Vietnamese speakers say
+        // it: "happy" → háp pi, "copy" → cóp pi, "office" → óp phít.
+        for (k in 0 until syls.size - 1) {
+            val s = syls[k]
+            val next = syls[k + 1].onset
+            if ((s.stress == "ˈ") && s.coda.isEmpty() && s.nucleus in SHORT && next.size == 1 && next[0] in HELD) {
+                s.coda = listOf(next[0])
+            }
+        }
+        val out = ArrayList<String>()
+        for (s in syls) {
+            var on = s.onset
+            var nuc = s.nucleus
+            if (on.takeLast(2) == listOf("t", "ɹ")) on = on.dropLast(2) + "tʃ"
+            var w = false
+            if (on.size >= 2 && on.last() == "w") { w = true; on = on.dropLast(1) }
+            else if (on == listOf("w")) { w = true; on = emptyList() }
+            else if (on.size >= 2 && on.last() == "j") {
+                on = on.dropLast(1)
+                if (nuc in setOf("uː", "ʊ", "ʊə") && s.coda.isEmpty()) nuc = "IU"
+            }
+            // Extra consonants at the start become their own "pờ / xờ" syllable.
+            if (on.size > 1) {
+                for (c in on.dropLast(1)) out += spellPart(Part(ONSET[c].orEmpty(), false, "əː", "", "", HUYEN))
+                on = on.takeLast(1)
+            }
+            out += spellPart(part(on.firstOrNull()?.let { ONSET[it] }.orEmpty(), w, nuc, s.coda.firstOrNull()))
+        }
+        return out.joinToString(" ")
+    }
+
+    private fun part(onset: String, w: Boolean, nuc: String, codaIn: String?): Part {
+        var (n, glide) = NUCLEUS.getValue(nuc)
+        var coda = codaIn
+        if (coda == null && glide.isEmpty()) n = when (n) { "a" -> "aː"; "ə" -> "əː"; else -> n }
+        if (glide.isNotEmpty() && coda != null && nuc != "eɪ") coda = null
+        // "apple" → áp pồ, "level" → le vồ, "google" → gu gồ.
+        if ((nuc == "ə" || nuc == "ɚ") && (coda == "l" || coda == "ɫ")) return Part(onset, w, "o", "", "", HUYEN)
+        // "email" → i meo, "sale" → xeo.
+        if (nuc == "eɪ" && (coda == "l" || coda == "ɫ")) return Part(onset, w, "ɛ", "w", "", "")
+        if (nuc == "eɪ" && coda != null) { n = "e"; glide = "" }
+        var tone = ""
+        var c = ""
+        when (coda) {
+            in STOP -> {
+                c = STOP.getValue(coda!!)
+                tone = SAC
+            }
+            in NASAL -> {
+                c = NASAL.getValue(coda!!)
+                if (c == "ŋ" && (n == "i" || n == "e")) c = "ɲ"
+                if ((coda == "l" || coda == "ɫ") && n in setOf("ɛ", "e", "i", "iə")) c = "w"
+            }
+        }
+        if (c == "w" || c == "j") { glide = c; c = "" }
+        return Part(onset, w, n, glide, c, tone)
+    }
+
+    private val LETTER = mapOf(
+        "i" to "i", "e" to "ê", "ɛ" to "e", "aː" to "a", "a" to "ă", "ə" to "â", "əː" to "ơ", "ɔ" to "o", "o" to "ô", "u" to "u",
+    )
+    private val WITH_J = mapOf(
+        "aː" to "ai", "a" to "ay", "ə" to "ây", "əː" to "ơi", "ɔ" to "oi", "o" to "ôi", "u" to "ui", "uə" to "uôi",
+        "e" to "ây", "ɛ" to "ay", "i" to "i",
+    )
+    private val WITH_W = mapOf(
+        "i" to "iu", "e" to "êu", "ɛ" to "eo", "aː" to "ao", "a" to "au", "ə" to "âu", "iə" to "iêu", "u" to "u",
+        "o" to "ô", "ɔ" to "ao", "əː" to "ơ", "uə" to "uô",
+    )
+    /** A "w" sound before the vowel: "oa", "oe", "uy"… ("twist" → tuýt, "window" → uyn đô). */
+    private val ROUNDED = mapOf(
+        "a" to "oa", "ă" to "oă", "e" to "oe", "ê" to "uê", "i" to "uy", "ơ" to "uơ", "â" to "uâ", "ia" to "uya",
+        "iê" to "uyê", "ai" to "oai", "ay" to "oay", "ao" to "oao", "eo" to "oeo",
+    )
+
+    private fun spellPart(p: Part): String {
+        val n = p.n
+        var v = when {
+            p.glide == "j" -> WITH_J[n] ?: (LETTER[n].orEmpty() + "i")
+            p.glide == "w" -> WITH_W[n] ?: (LETTER[n].orEmpty() + "u")
+            n == "iə" -> if (p.coda.isEmpty()) "ia" else "iê"
+            n == "uə" -> if (p.coda.isEmpty()) "ua" else "uô"
+            else -> LETTER[n].orEmpty()
+        }
+        if (n == "iə" && p.onset.isEmpty() && !p.w && v.startsWith("iê")) v = "y" + v.substring(1)
+        val rounded = p.w && n !in setOf("ɔ", "o", "u", "uə")
+        if (rounded) v = ROUNDED[v] ?: v
+        val coda = when (p.coda) {
+            "p" -> "p"; "t" -> "t"; "k" -> "c"; "m" -> "m"; "n" -> "n"; "ŋ" -> "ng"; "ɲ" -> "nh"
+            "c" -> if (n == "i" || n == "e") "ch" else "c"
+            else -> ""
+        }
+        var onset: String
+        if (rounded && p.onset == "k") {
+            // "qu" carries the w: "qua", "que", "quy", "quét".
+            onset = "qu"
+            v = v.drop(1)
+        } else {
+            val first = v.firstOrNull() ?: 'a'
+            val front = first in "ieêy"
+            onset = when (p.onset) {
+                "k" -> if (front) "k" else "c"
+                "ɣ" -> if (front && first != 'y') "gh" else "g"
+                "ŋ" -> if (front && first != 'y') "ngh" else "ng"
+                "p" -> "p"; "b" -> "b"; "t", "t̪", "ɾ" -> "t"; "tʃ" -> "ch"; "ɗ" -> "đ"; "m" -> "m"; "n" -> "n"
+                "f" -> "ph"; "v" -> "v"; "s" -> "x"; "z" -> "d"; "h" -> "h"; "l" -> "l"; "x" -> "kh"
+                else -> ""
+            }
+        }
+        val mark = when (p.tone) { SAC -> "\u0301"; HUYEN -> "\u0300"; else -> "" }
+        if (mark.isNotEmpty() && v.isNotEmpty()) {
+            val special = v.indexOfLast { it in "êơôâăư" }
+            val vowels = v.indices.filter { v[it] in "aeiouy" }
+            val at = when {
+                special >= 0 -> special
+                vowels.isEmpty() -> v.lastIndex
+                coda.isNotEmpty() || v in setOf("oa", "oe", "uy") -> vowels.last()
+                else -> vowels.first()
+            }
+            v = v.substring(0, at + 1) + mark + v.substring(at + 1)
+        }
+        return Normalizer.normalize(onset + v + coda, Normalizer.Form.NFC)
     }
 }
