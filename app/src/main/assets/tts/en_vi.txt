@@ -1,0 +1,345 @@
+# Mạng xã hội, video
+video	vi đi ô
+like	lai
+share	se
+subscribe	xấp xờ cờ rai
+subscriber	xấp xờ cờ rai bơ
+comment	com men
+follow	pho lô
+follower	pho lô ơ
+fan	phan
+fanpage	phan pết
+page	pết
+idol	ai đồ
+live	lai
+livestream	lai xờ trim
+stream	xờ trim
+streamer	xờ tri mơ
+tiktok	tíc tóc
+tiktoker	tíc tóc cơ
+youtube	diu túp
+youtuber	diu túp bơ
+facebook	phây búc
+instagram	in xờ ta gờ ram
+zalo	da lô
+google	gu gồ
+shopee	sốp pi
+lazada	la da đa
+tiki	ti ki
+grab	gờ ráp
+iphone	ai phôn
+ipad	ai pát
+samsung	sam sung
+apple	áp pồ
+android	an đờ roi
+app	áp
+game	ghêm
+gamer	ghêm mơ
+online	on lai
+offline	óp lai
+email	i meo
+gmail	gi meo
+wifi	oai phai
+internet	in tơ nét
+website	oép sai
+web	oép
+link	linh
+click	cờ lích
+okay	ô kê
+oke	ô kê
+ok	ô kê
+deadline	đét lai
+project	pờ rô dếch
+team	tim
+teamwork	tim guốc
+meeting	mít tinh
+manager	ma na giơ
+marketing	ma két tinh
+sale	seo
+sales	seo
+voucher	vâu chơ
+freeship	phờ ri síp
+ship	síp
+shipper	síp pơ
+shop	sốp
+order	o đơ
+check	chéc
+checkin	chéc in
+update	ấp đết
+download	đao lốt
+upload	ấp lốt
+password	pát guốt
+laptop	láp tóp
+smartphone	xờ mát phôn
+camera	ca mê ra
+design	đi dai
+designer	đi dai nơ
+style	xờ tai
+smooth	xờ mút
+cool	cun
+hot	hót
+trend	tren
+trending	tren đinh
+viral	vai rồ
+content	con ten
+creator	cờ ri ây tơ
+clip	cờ líp
+vlog	vi lốc
+vlogger	vi lốc gơ
+blog	bờ lốc
+blogger	bờ lốc gơ
+podcast	pót cát
+review	ri viu
+reviewer	ri viu ơ
+unbox	ăn bốc
+unboxing	ăn bốc xinh
+feedback	phít bách
+plot	pờ lót
+twist	tuýt
+recommend	ri cờ men
+remix	ri mích
+music	miu dích
+playlist	pờ lây lít
+singer	xinh gơ
+rap	ráp
+rapper	ráp pơ
+hit	hít
+top	tốp
+level	le vồ
+skill	xờ kin
+boss	bốt
+member	mem bơ
+group	gờ rúp
+chat	chát
+call	côn
+message	mét xịt
+inbox	in bốc
+spam	xờ pam
+story	xờ to ri
+post	pốt
+selfie	xeo phi
+photo	phô tô
+filter	phin tơ
+makeup	mây cắp
+fashion	phe sần
+outfit	ao phít
+size	sai
+model	mô đồ
+brand	bờ ren
+logo	lô gô
+menu	mê nu
+coffee	cóp phi
+party	pa ti
+happy	háp pi
+birthday	bớt đây
+weekend	uých en
+holiday	ho li đây
+travel	tra vồ
+tour	tua
+hotel	hô ten
+resort	ri sọt
+booking	búc kinh
+ticket	tích kịt
+taxi	tắc xi
+bus	buýt
+show	sâu
+showbiz	sô bít
+talkshow	tóc sâu
+gameshow	ghêm sâu
+event	i ven
+concert	con xớt
+film	phim
+movie	mu vi
+series	xi ri
+season	xi dần
+trailer	trây lơ
+spoiler	xờ poi lơ
+cosplay	cốt pờ lây
+anime	a ni mê
+manga	man ga
+business	bít nít
+startup	xờ tát ắp
+target	ta ghét
+plan	pờ lan
+idea	ai đia
+zoom	dum
+parttime	pát tai
+fulltime	phun tai
+freelancer	phờ ri lan xơ
+freelance	phờ ri lan
+job	gióp
+work	guốc
+office	o phít
+salary	xa la ri
+bonus	bô nớt
+interview	in tơ viu
+fail	phêu
+win	uyn
+tip	típ
+hack	hách
+hacker	hách cơ
+bug	bấc
+fix	phích
+code	cốt
+coder	cốt đơ
+data	đa ta
+chatgpt	chát gi pi ti
+smart	xờ mát
+tablet	táp lét
+headphone	hét phôn
+bluetooth	bờ lu tút
+charge	sạc
+hello	hê lô
+bye	bai
+sorry	xo ri
+thank	thanh
+thanks	thanh
+you	diu
+please	pờ li
+wow	oao
+yes	dét
+baby	bây bi
+love	lớp
+crush	cờ rớt
+couple	cáp pồ
+date	đết
+single	xinh gồ
+cute	kiu
+beauty	biu ti
+skincare	xờ kin ke
+body	bo đi
+gym	dim
+fitness	phít nét
+yoga	dô ga
+diet	đai ợt
+healthy	heo thi
+food	phút
+fastfood	phát phút
+combo	com bô
+free	phờ ri
+discount	đít cao
+cashback	cát bách
+banking	beng kinh
+pass	pát
+admin	át min
+hashtag	hát tác
+view	viu
+viewer	viu ơ
+channel	chen nồ
+editor	e đi tơ
+edit	e đít
+effect	i phéc
+sticker	xờ tích cơ
+font	phông
+text	tếch
+caption	cáp sần
+template	tem pờ lết
+slow	xờ lâu
+motion	mô sần
+intro	in trô
+outro	ao trô
+background	béc gờ rao
+sound	xao
+beat	bít
+cover	co vơ
+karaoke	ca ra ô kê
+player	pờ lây ơ
+skin	xờ kin
+rank	ranh
+noob	núp
+pro	pờ rô
+lag	lách
+donate	đô nết
+support	xấp pọt
+super	xu pơ
+power	pao ơ
+max	mắc
+mini	mi ni
+plus	pờ lớt
+ultra	un tra
+watch	oát
+home	hôm
+best	bét
+good	gút
+nice	nai
+perfect	pơ phéc
+amazing	ơ mây dinh
+beautiful	biu ti phồ
+wonderful	guân đơ phồ
+and	en
+of	óp
+is	ít
+it	ít
+for	pho
+with	uýt
+your	do
+we	uy
+are	a
+morning	mo ninh
+night	nai
+time	tai
+life	lai
+new	niu
+news	niu
+big	bích
+small	xờ mon
+real	ria
+fake	phết
+one	oăn
+two	tu
+three	thờ ri
+what	goát
+how	hao
+why	oai
+who	hu
+yeah	de
+oh	ô
+sweet	xuýt
+honey	ha ni
+girl	gơ
+boy	boi
+family	phe mi li
+friend	phờ ren
+bro	bờ rô
+sis	xít
+ready	re đi
+start	xờ tát
+stop	xờ tóp
+go	gâu
+let	lét
+lets	lét
+play	pờ lây
+vietnam	việt nam
+hanoi	hà nội
+saigon	sài gòn
+off	óp
+on	on
+in	in
+out	ao
+up	ắp
+down	đao
+cancel	can xồ
+setting	xét tinh
+settings	xét tinh
+mode	mốt
+dark	đác
+light	lai
+full	phun
+hd	hát đê
+OK	ô kê
+AI	ây ai
+IT	ai ti
+CEO	xi i ô
+KPI	kê pê i
+CV	xi vi
+PC	pi xi
+TV	ti vi
+GPT	gi pi ti
+QR	kiu a
+OTP	ô tê pê
+VIP	vi ai pi
+MV	em vi
+DJ	đi giây
+MC	em xi
+PR	pi a
+FA	ép phây

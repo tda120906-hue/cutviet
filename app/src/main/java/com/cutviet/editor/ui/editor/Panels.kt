@@ -789,6 +789,9 @@ private fun VoicePanel(vm: EditorViewModel) {
     var exactMs by remember { mutableStateOf<Long?>(null) }
     var measuring by remember { mutableStateOf(false) }
     var speaking by remember { mutableStateOf(false) }
+    var showWords by remember { mutableStateOf(false) }
+    // Changes when the user corrects how an English word is read, so the length is measured again.
+    var wordsVersion by remember { mutableStateOf(com.cutviet.editor.media.tts.Pronunciation.version) }
     val startMs = editing?.startMs ?: vm.playheadMs
     val status = engine.status.value
     val voices = engine.voices.value
@@ -799,7 +802,7 @@ private fun VoicePanel(vm: EditorViewModel) {
     val lengthMs = exactMs ?: estimate
 
     // Measure the exact length by synthesizing in the background once typing pauses.
-    LaunchedEffect(text, voiceName, pitch, rate, status) {
+    LaunchedEffect(text, voiceName, pitch, rate, status, wordsVersion) {
         exactMs = null
         if (status != VoiceEngine.Status.READY || text.isBlank()) return@LaunchedEffect
         delay(900)
@@ -859,6 +862,15 @@ private fun VoicePanel(vm: EditorViewModel) {
         minLines = 2,
         maxLines = 5,
     )
+    if (text.any { it in 'a'..'z' || it in 'A'..'Z' }) {
+        TextButton(onClick = { showWords = true }) { Text("Sửa cách đọc từ tiếng Anh") }
+    }
+    if (showWords) {
+        EnglishWordsDialog(text, engine, voiceName, pitch, rate) {
+            showWords = false
+            wordsVersion = com.cutviet.editor.media.tts.Pronunciation.version
+        }
+    }
 
     // Duration estimate and where it lands on the video.
     val endMs = startMs + lengthMs
