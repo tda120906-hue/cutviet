@@ -59,9 +59,12 @@ fun OverlayGizmo(vm: EditorViewModel, modifier: Modifier = Modifier) {
             return Offset(left + item.x * frameW, top + item.y * frameH) to Size(s.width / 2f, s.height / 2f)
         }
         val boxOf by rememberUpdatedState(::textBox)
+        // The preview changes size when a panel opens (e.g. on touching a text); a gesture in
+        // progress must survive that, so it reads the current frame instead of restarting.
+        val frameNow by rememberUpdatedState(frame)
 
         Canvas(
-            Modifier.fillMaxSize().pointerInput(canvasW, canvasH, boxW, boxH) {
+            Modifier.fillMaxSize().pointerInput(Unit) {
                 val handleRadius = 28.dp.toPx()
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
@@ -70,14 +73,22 @@ fun OverlayGizmo(vm: EditorViewModel, modifier: Modifier = Modifier) {
                     // Text and stickers lie above the overlays: they get the touch first.
                     val slop = 12.dp.toPx()
                     val texts = visibleTexts(vm.project.texts, now)
-                    val hitText = (listOfNotNull(texts.firstOrNull { it.id == vm.editingTextId }) + texts.asReversed()).firstOrNull { tx ->
+                    // The corner handle of the selected text resizes it with one finger.
+                    val editingVisible = texts.firstOrNull { it.id == vm.editingTextId }
+                    val cornerHit = editingVisible?.takeIf { tx ->
+                        boxOf(tx.id)?.let { (c, h) -> (down.position - Offset(c.x + h.width + 4.dp.toPx(), c.y + h.height + 4.dp.toPx())).getDistance() <= handleRadius } ?: false
+                    }
+                    val hitText = cornerHit ?: (listOfNotNull(editingVisible) + texts.asReversed()).firstOrNull { tx ->
                         boxOf(tx.id)?.let { (c, h) -> abs(down.position.x - c.x) <= h.width + slop && abs(down.position.y - c.y) <= h.height + slop } ?: false
                     }
                     if (hitText != null) {
                         down.consume()
                         vm.preview.pause()
-                        if (vm.editingTextId != hitText.id) vm.selectText(hitText.id)
+                        // Selected for moving and resizing here; its panel opens only from the timeline.
+                        if (vm.editingTextId != hitText.id) vm.pickTextOnPreview(hitText.id)
                         val origin = hitText
+                        val center = boxOf(origin.id)?.first ?: down.position
+                        val startDistance = max(1f, (down.position - center).getDistance())
                         var started = false
                         var pan = Offset.Zero
                         var zoom = 1f
@@ -92,17 +103,26 @@ fun OverlayGizmo(vm: EditorViewModel, modifier: Modifier = Modifier) {
                                 vm.beginDrag()
                             }
                             event.changes.forEach { it.consume() }
-                            var x = (origin.x + pan.x / frameW).coerceIn(0f, 1f)
-                            var y = (origin.y + pan.y / frameH).coerceIn(0f, 1f)
-                            if (vm.snapEnabled) {
-                                if (abs(x - 0.5f) < 0.015f) x = 0.5f
-                                if (abs(y - 0.5f) < 0.015f) y = 0.5f
+                            val f = frameNow
+                            val updated = if (cornerHit != null) {
+                                val finger = event.changes.firstOrNull { it.id == down.id }?.position ?: (down.position + pan)
+                                val k = (finger - center).getDistance() / startDistance
+                                origin.copy(size = (origin.size * k).coerceIn(0.02f, 0.5f))
+                            } else {
+                                var x = (origin.x + pan.x / f.width).coerceIn(0f, 1f)
+                                var y = (origin.y + pan.y / f.height).coerceIn(0f, 1f)
+                                if (vm.snapEnabled) {
+                                    if (abs(x - 0.5f) < 0.015f) x = 0.5f
+                                    if (abs(y - 0.5f) < 0.015f) y = 0.5f
+                                }
+                                origin.copy(x = x, y = y, size = (origin.size * zoom).coerceIn(0.02f, 0.5f))
                             }
-                            val size = (origin.size * zoom).coerceIn(0.02f, 0.5f)
-                            vm.dragUpdate(ProjectOps.updateText(vm.project, origin.id) { it.copy(x = x, y = y, size = size) })
+                            vm.dragUpdate(ProjectOps.updateText(vm.project, origin.id) { it.copy(x = updated.x, y = updated.y, size = updated.size) })
                         }
                         return@awaitEachGesture
                     }
+                    // A touch on empty picture lets go of a text picked on the preview.
+                    if (vm.panel == null && vm.editingTextId != null && visible.none { place(it).contains(down.position) }) vm.editingTextId = null
                     if (visible.isEmpty()) return@awaitEachGesture
                     val current = vm.selectedOverlay?.takeIf { o -> visible.any { it.id == o.id } }
                     var resizing = false
@@ -136,8 +156,8 @@ fun OverlayGizmo(vm: EditorViewModel, modifier: Modifier = Modifier) {
                             val scale = (origin.scale * (change.position - center).getDistance() / startDistance).coerceIn(0.05f, 4f)
                             vm.dragUpdate(ProjectOps.updateOverlay(vm.project, origin.id) { it.copy(scale = scale) })
                         } else {
-                            var x = (origin.x + delta.x / frameW).coerceIn(0f, 1f)
-                            var y = (origin.y + delta.y / frameH).coerceIn(0f, 1f)
+                            var x = (origin.x + delta.x / frameNow.width).coerceIn(0f, 1f)
+                            var y = (origin.y + delta.y / frameNow.height).coerceIn(0f, 1f)
                             // Settle on the centre lines when close to them.
                             if (vm.snapEnabled) {
                                 if (abs(x - 0.5f) < 0.015f) x = 0.5f
@@ -158,6 +178,9 @@ fun OverlayGizmo(vm: EditorViewModel, modifier: Modifier = Modifier) {
                         size = Size(h.width * 2 + pad * 2, h.height * 2 + pad * 2),
                         style = Stroke(2.dp.toPx()),
                     )
+                    val corner = Offset(c.x + h.width + pad, c.y + h.height + pad)
+                    drawCircle(Color.White, radius = 9.dp.toPx(), center = corner)
+                    drawCircle(Accent, radius = 7.dp.toPx(), center = corner)
                 }
             }
             if (!showBox || selected == null) return@Canvas

@@ -473,6 +473,19 @@ object ProjectOps {
 
     private fun nearestEven(v: Float): Int = max(2, (v / 2f).roundToInt() * 2)
 
+    /**
+     * Output size for [settings]: "Gốc" keeps [canvas]; a chosen resolution sets the short side,
+     * scaling up too (e.g. 1080p to 4K for sites that give 4K uploads more bitrate).
+     */
+    fun exportSize(canvas: Pair<Int, Int>, settings: ExportSettings): Pair<Int, Int> {
+        val target = settings.shortSide ?: return canvas
+        val (w, h) = canvas
+        val s = min(w, h)
+        if (s == target) return canvas
+        val k = target.toFloat() / s
+        return even((w * k).roundToInt()) to even((h * k).roundToInt())
+    }
+
     /** Scales [size] down so that its short side is at most [shortSide] (never up). */
     fun scaleToShortSide(size: Pair<Int, Int>, shortSide: Int?): Pair<Int, Int> {
         if (shortSide == null) return size
@@ -518,11 +531,19 @@ object ProjectOps {
 
 enum class ExportResolution(val label: String, val shortSide: Int?) {
     ORIGINAL("Gốc", null),
+    P4320("8K", 4320),
+    P2880("5K", 2880),
     P2160("4K", 2160),
     P1440("2K", 1440),
     P1080("1080p", 1080),
+    P900("900p", 900),
     P720("720p", 720),
+    P540("540p", 540),
     P480("480p", 480),
+    P360("360p", 360),
+    P240("240p", 240),
+    /** Short side typed by the user ([ExportSettings.customShortSide]). */
+    CUSTOM("Tự nhập", null),
 }
 
 enum class ExportQuality(val label: String, val factor: Double) {
@@ -538,8 +559,19 @@ enum class ExportCodec(val label: String) {
 
 data class ExportSettings(
     val resolution: ExportResolution = ExportResolution.ORIGINAL,
+    /** CUSTOM: the short side in pixels (the long side follows the frame's shape). */
+    val customShortSide: Int = 1080,
     val quality: ExportQuality = ExportQuality.ORIGINAL,
     val codec: ExportCodec = ExportCodec.H264,
     /** Burn the subtitles into the picture. */
     val burnSubtitles: Boolean = true,
-)
+) {
+    /** Short side asked for, or null for the original size. */
+    val shortSide: Int?
+        get() = if (resolution == ExportResolution.CUSTOM) customShortSide.coerceIn(MIN_SHORT_SIDE, MAX_SHORT_SIDE) else resolution.shortSide
+
+    companion object {
+        const val MIN_SHORT_SIDE = 144
+        const val MAX_SHORT_SIDE = 4320
+    }
+}

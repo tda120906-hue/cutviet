@@ -308,6 +308,7 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
     // ---- selection ----
 
     fun select(index: Int?) {
+        editingTextId = null
         selectedOverlayId = null
         selectedAudioId = null
         selected = if (selected == index) null else index
@@ -317,6 +318,7 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
     /** Selects an overlay; tapping the selected one again deselects it unless [toggle] is false. */
     fun selectOverlay(id: String?, toggle: Boolean = true) {
         if (!toggle && selectedOverlayId == id) return
+        editingTextId = null
         selected = null
         selectedAudioId = null
         selectedOverlayId = if (toggle && selectedOverlayId == id) null else id
@@ -326,6 +328,7 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
     }
 
     fun selectAudio(id: String?) {
+        editingTextId = null
         selected = null
         selectedOverlayId = null
         selectedAudioId = if (selectedAudioId == id) null else id
@@ -333,6 +336,7 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
     }
 
     fun clearSelection() {
+        editingTextId = null
         selected = null
         selectedOverlayId = null
         selectedAudioId = null
@@ -1218,6 +1222,60 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
 
     /** Size in preview pixels of each text layer as last drawn, for moving it on the preview. */
     val textSizes = androidx.compose.runtime.mutableStateMapOf<String, androidx.compose.ui.unit.IntSize>()
+
+    /**
+     * Touching a text/sticker on the preview selects it for moving and resizing there, without
+     * opening its panel (owner: the panel opens only from its bar on the timeline).
+     */
+    fun pickTextOnPreview(id: String) {
+        selected = null
+        selectedOverlayId = null
+        selectedAudioId = null
+        if (panel != null && panel != Panel.TEXT && panel != Panel.STICKER) closePanel()
+        editingTextId = id
+    }
+
+    /** Opens the panel of the text picked on the preview. */
+    fun editPickedText() {
+        val id = editingTextId ?: return
+        selectText(id)
+    }
+
+    /**
+     * "Tẩy một phần" on a text/sticker: it becomes a picture overlay (same place, size and time)
+     * and the eraser opens on it. The words can no longer be edited as text after that.
+     */
+    fun eraseText(id: String) {
+        val t = project.texts.firstOrNull { it.id == id } ?: return
+        val (cw, ch) = ProjectOps.canvasSize(project)
+        val app = getApplication<Application>()
+        busy = true
+        viewModelScope.launch {
+            val rendered = withContext(Dispatchers.IO) {
+                runCatching { com.cutviet.editor.media.TextBitmap.render(t, ch, File(app.filesDir, "stickers")) }.getOrNull()
+            }
+            busy = false
+            if (rendered == null) {
+                toast = "Không chuyển được nhãn dán để tẩy"
+                return@launch
+            }
+            val (file, size) = rendered
+            val (bw, bh) = size
+            val fit = minOf(cw.toFloat() / bw, ch.toFloat() / bh)
+            val ov = Overlay(
+                uri = Uri.fromFile(file).toString(), name = t.text.take(20), mime = "image/png", isImage = true,
+                sourceDurationMs = t.durationMs, width = bw, height = bh, hasAudio = false,
+                trimStartMs = 0, trimEndMs = t.durationMs, startMs = t.startMs,
+                x = t.x, y = t.y, scale = (1f / fit).coerceIn(0.05f, 4f),
+            )
+            if (panel != null) closePanel()
+            commit(project.copy(texts = project.texts.filterNot { it.id == id }, overlays = project.overlays + ov))
+            editingTextId = null
+            selectedOverlayId = ov.id
+            eraserOverlayId = ov.id
+            toast = "Đã chuyển thành lớp phủ ảnh để tẩy"
+        }
+    }
 
     /** The text layer being edited, if any. */
     val editingText: TextItem? get() = editingTextId?.let { id -> project.texts.firstOrNull { it.id == id } }
