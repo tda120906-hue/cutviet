@@ -139,6 +139,8 @@ private fun EditorContent(vm: EditorViewModel, onBack: () -> Unit) {
         if (granted) showExport = true
         else Toast.makeText(context, "Cần quyền bộ nhớ để lưu video", Toast.LENGTH_LONG).show()
     }
+    // Progress of a long split export is shown in the notification bar.
+    val notifyPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
     fun addMedia() = mediaPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
     fun addMusic() = musicPicker.launch(arrayOf("audio/*", "video/*"))
     fun addOverlay() = overlayPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
@@ -248,12 +250,22 @@ private fun EditorContent(vm: EditorViewModel, onBack: () -> Unit) {
     }
 
     if (showExport) {
-        ExportDialog(vm, onDismiss = { showExport = false }, onStart = { settings ->
-            showExport = false
-            vm.export(settings)
-        })
+        ExportDialog(
+            vm,
+            onDismiss = { showExport = false },
+            onStart = { settings ->
+                showExport = false
+                vm.export(settings)
+            },
+            onStartSplit = { settings, parts ->
+                showExport = false
+                if (Build.VERSION.SDK_INT >= 33) notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                vm.exportSplit(settings, parts)
+            },
+        )
     }
     ExportProgress(vm)
+    SplitExportProgress(vm)
     vm.cropClipId?.let { id ->
         vm.project.clips.firstOrNull { it.id == id }?.let { CropDialog(vm, it) }
     }

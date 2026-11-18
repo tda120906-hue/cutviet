@@ -29,6 +29,8 @@ import com.cutviet.editor.model.Subtitle
 import com.cutviet.editor.model.SubtitleCues
 import com.cutviet.editor.model.SubtitleStyle
 import com.cutviet.editor.media.Exporter
+import com.cutviet.editor.media.ExportSpeed
+import com.cutviet.editor.media.SplitExportWorker
 import com.cutviet.editor.media.MediaProbe
 import com.cutviet.editor.media.VoiceEngine
 import com.cutviet.editor.model.AudioKind
@@ -41,6 +43,7 @@ import java.io.File
 import com.cutviet.editor.media.PreviewController
 import com.cutviet.editor.model.Clip
 import com.cutviet.editor.model.ExportSettings
+import com.cutviet.editor.model.SplitPart
 import com.cutviet.editor.model.Project
 import com.cutviet.editor.model.ProjectOps
 import com.cutviet.editor.model.ProjectStore
@@ -690,6 +693,7 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
     // After the dubbing state above is initialised.
     init {
         watchDubbing()
+        watchSplit()
     }
 
     /**
@@ -1148,6 +1152,110 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
     }
 
     fun cancelExport() = exporter.cancel()
+
+    // ---- export as several videos ----
+
+    sealed interface SplitState {
+        data object Idle : SplitState
+        data class Running(
+            val part: Int, val parts: Int, val percent: Int, val etaPartMs: Long?, val etaTotalMs: Long?,
+            val width: Int, val height: Int,
+        ) : SplitState
+        data class Done(val saved: List<SplitExportWorker.Saved>, val parts: Int) : SplitState
+        /** [canResume]: the plan is kept, "Xuất tiếp" carries on from the first unsaved video. */
+        data class Stopped(val message: String, val saved: List<SplitExportWorker.Saved>, val parts: Int, val canResume: Boolean) : SplitState
+    }
+
+    var splitState by mutableStateOf<SplitState>(SplitState.Idle)
+        private set
+
+    /** Estimated real time to export [mediaMs] at [settings] on this phone, and whether that speed was measured here. */
+    fun estimateExportMs(settings: ExportSettings, mediaMs: Long): Pair<Long, Boolean> {
+        val app = getApplication<Application>()
+        val (w, h) = outputSize(settings)
+        return ExportSpeed.estimateMs(app, w, h, mediaMs) to ExportSpeed.isMeasured(app)
+    }
+
+    fun exportSplit(settings: ExportSettings, parts: List<SplitPart>) {
+        if (parts.isEmpty()) return
+        preview.pause()
+        saveNow()
+        val app = getApplication<Application>()
+        val snapshot = project
+        viewModelScope.launch {
+            val busyElsewhere = withContext(Dispatchers.IO) {
+                runCatching {
+                    WorkManager.getInstance(app).getWorkInfosForUniqueWork(SplitExportWorker.UNIQUE_NAME).get()
+                        .any { !it.state.isFinished && !it.tags.contains(SplitExportWorker.projectTag(snapshot.id)) }
+                }.getOrDefault(false)
+            }
+            if (busyElsewhere) {
+                toast = "Đang xuất chia video của một dự án khác. Đợi xong hoặc huỷ ở thanh thông báo."
+                return@launch
+            }
+            splitState = SplitState.Running(0, parts.size, 0, null, null, 0, 0)
+            withContext(Dispatchers.IO) { SplitExportWorker.start(app, snapshot, settings, parts) }
+        }
+    }
+
+    fun resumeSplit() {
+        val app = getApplication<Application>()
+        if (SplitExportWorker.resume(app, project.id)) {
+            splitState = SplitState.Running(SplitExportWorker.saved(app, project.id).size, SplitExportWorker.partCount(app, project.id), 0, null, null, 0, 0)
+        } else {
+            splitState = SplitState.Idle
+        }
+    }
+
+    /** Stops the job; the videos already saved stay, and it can be carried on later. */
+    fun cancelSplit() {
+        WorkManager.getInstance(getApplication<Application>()).cancelUniqueWork(SplitExportWorker.UNIQUE_NAME)
+    }
+
+    /** Closes the result. A finished job, or one the user gives up on, is forgotten. */
+    fun dismissSplit(keepForResume: Boolean = false) {
+        if (!keepForResume) SplitExportWorker.forget(getApplication<Application>(), project.id)
+        splitState = SplitState.Idle
+    }
+
+    /** Follows this project's split export, also one that kept running after the editor was closed. */
+    private fun watchSplit() {
+        val app = getApplication<Application>()
+        viewModelScope.launch {
+            WorkManager.getInstance(app).getWorkInfosForUniqueWorkFlow(SplitExportWorker.UNIQUE_NAME).collect { infos ->
+                val info = infos.lastOrNull { it.tags.contains(SplitExportWorker.projectTag(project.id)) } ?: return@collect
+                val jobExists = withContext(Dispatchers.IO) { SplitExportWorker.jobDir(app, project.id).exists() }
+                if (!jobExists) return@collect // already seen and forgotten
+                if (!info.state.isFinished) {
+                    val pr = info.progress
+                    val parts = pr.getInt(SplitExportWorker.KEY_PARTS, 0)
+                    if (parts == 0) {
+                        if (splitState !is SplitState.Running) {
+                            splitState = SplitState.Running(0, SplitExportWorker.partCount(app, project.id), 0, null, null, 0, 0)
+                        }
+                        return@collect
+                    }
+                    splitState = SplitState.Running(
+                        part = pr.getInt(SplitExportWorker.KEY_PART, 0), parts = parts,
+                        percent = pr.getInt(SplitExportWorker.KEY_PERCENT, 0),
+                        etaPartMs = pr.getLong(SplitExportWorker.KEY_ETA_PART, -1).takeIf { it >= 0 },
+                        etaTotalMs = pr.getLong(SplitExportWorker.KEY_ETA_TOTAL, -1).takeIf { it >= 0 },
+                        width = pr.getInt(SplitExportWorker.KEY_WIDTH, 0), height = pr.getInt(SplitExportWorker.KEY_HEIGHT, 0),
+                    )
+                    return@collect
+                }
+                val saved = withContext(Dispatchers.IO) { SplitExportWorker.saved(app, project.id) }
+                val parts = withContext(Dispatchers.IO) { SplitExportWorker.partCount(app, project.id) }
+                splitState = when (info.state) {
+                    WorkInfo.State.SUCCEEDED -> SplitState.Done(saved, parts)
+                    WorkInfo.State.FAILED -> SplitState.Stopped(
+                        info.outputData.getString(SplitExportWorker.KEY_ERROR) ?: "Xuất thất bại.", saved, parts, canResume = saved.size < parts,
+                    )
+                    else -> SplitState.Stopped("Đã dừng xuất.", saved, parts, canResume = saved.size < parts)
+                }
+            }
+        }
+    }
 
     fun dismissExport() {
         exportState = Exporter.State.Idle
