@@ -63,6 +63,8 @@ object CompositionFactory {
         val includeSpeed: Boolean = true,
         /** Burn the project's subtitles into the picture (export; the editor draws them itself). */
         val includeSubtitles: Boolean = false,
+        /** Draw the text and sticker layers into the picture (export; the editor draws them itself). */
+        val includeTexts: Boolean = false,
         val hdrMode: Int = Composition.HDR_MODE_KEEP_HDR,
     )
 
@@ -83,7 +85,8 @@ object CompositionFactory {
         val placed = project.overlays.filter { it.startMs < total && it.durationMs > 0 }
         val overlays = if (o.includeOverlays) placed else emptyList()
         val subtitles = if (o.includeSubtitles) project.subtitles.filter { it.text.isNotBlank() && it.startMs < total } else emptyList()
-        if (overlays.isEmpty() && subtitles.isEmpty()) {
+        val texts = if (o.includeTexts) project.texts.filter { it.text.isNotBlank() && it.startMs < total && it.durationMs > 0 } else emptyList()
+        if (overlays.isEmpty() && subtitles.isEmpty() && texts.isEmpty()) {
             videoSequences += main
         } else {
             // Media3's compositor draws the first sequence on top and takes output timestamps from it.
@@ -93,16 +96,21 @@ object CompositionFactory {
             val transparent = transparentImageUri(context)
             val fps = project.clips.filter { !it.isImage }.maxOfOrNull { it.frameRate }?.roundToInt()?.coerceIn(24, 120) ?: 30
             val clock = fillerItem(transparent, total, fps).let { item ->
-                if (subtitles.isEmpty()) item
-                else item.buildUpon().setEffects(
-                    Effects(
-                        emptyList(),
-                        listOf(
-                            Presentation.createForWidthAndHeight(o.width, o.height, Presentation.LAYOUT_STRETCH_TO_FIT),
-                            OverlayEffect(ImmutableList.of<TextureOverlay>(SubtitleOverlay(subtitles, project.subtitleStyle))),
+                if (subtitles.isEmpty() && texts.isEmpty()) item
+                else {
+                    // Text layers first, subtitles last so they stay on top.
+                    val drawn: List<TextureOverlay> = texts.map { TimedTextOverlay(it, o.height) } +
+                        (if (subtitles.isEmpty()) emptyList() else listOf<TextureOverlay>(SubtitleOverlay(subtitles, project.subtitleStyle)))
+                    item.buildUpon().setEffects(
+                        Effects(
+                            emptyList(),
+                            listOf(
+                                Presentation.createForWidthAndHeight(o.width, o.height, Presentation.LAYOUT_STRETCH_TO_FIT),
+                                OverlayEffect(ImmutableList.copyOf(drawn)),
+                            ),
                         ),
-                    ),
-                ).build()
+                    ).build()
+                }
             }
             videoSequences += EditedMediaItemSequence.Builder(VIDEO_ONLY)
                 .addItem(clock)
@@ -129,7 +137,7 @@ object CompositionFactory {
         }
 
         val builder = Composition.Builder(videoSequences + audioSequences).setHdrMode(o.hdrMode)
-        if (videoSequences.size > 1) builder.setVideoCompositorSettings(LayerSettings(o.width, o.height, overlayByIndex, showClock = subtitles.isNotEmpty()))
+        if (videoSequences.size > 1) builder.setVideoCompositorSettings(LayerSettings(o.width, o.height, overlayByIndex, showClock = subtitles.isNotEmpty() || texts.isNotEmpty()))
         return builder.build()
     }
 
@@ -371,6 +379,32 @@ object CompositionFactory {
         RgbAdjustment.Builder().setRedScale(r).setGreenScale(g).setBlueScale(b).build()
 
     private fun textOverlay(t: TextItem, outputHeight: Int): TextureOverlay {
+        val settings = StaticOverlaySettings.Builder()
+            .setBackgroundFrameAnchor(t.x.coerceIn(0f, 1f) * 2 - 1, 1 - t.y.coerceIn(0f, 1f) * 2)
+            .build()
+        return TextOverlay.createStaticTextOverlay(styledText(t, outputHeight), settings)
+    }
+
+    /**
+     * A text or sticker layer on the timeline: drawn from its start for its duration (the clock
+     * layer's frame times are the timeline's), invisible otherwise.
+     */
+    private class TimedTextOverlay(private val t: TextItem, outputHeight: Int) : TextOverlay() {
+        private val full = styledText(t, outputHeight)
+        private val blank = SpannableString(" ")
+        private val startUs = t.startMs * 1000
+        private val endUs = t.endMs * 1000
+        private val settings = StaticOverlaySettings.Builder()
+            .setBackgroundFrameAnchor(t.x.coerceIn(0f, 1f) * 2 - 1, 1 - t.y.coerceIn(0f, 1f) * 2)
+            .build()
+
+        override fun getText(presentationTimeUs: Long): SpannableString =
+            if (presentationTimeUs in startUs until endUs) full else blank
+
+        override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings = settings
+    }
+
+    private fun styledText(t: TextItem, outputHeight: Int): SpannableString {
         val text = SpannableString(t.text)
         val px = max(8, (t.size * outputHeight).roundToInt())
         val all = Spanned.SPAN_INCLUSIVE_INCLUSIVE
@@ -380,10 +414,7 @@ object CompositionFactory {
             if (t.bold) text.setSpan(StyleSpan(Typeface.BOLD), 0, text.length, all)
             t.background?.let { text.setSpan(BackgroundColorSpan(it), 0, text.length, all) }
         }
-        val settings = StaticOverlaySettings.Builder()
-            .setBackgroundFrameAnchor(t.x.coerceIn(0f, 1f) * 2 - 1, 1 - t.y.coerceIn(0f, 1f) * 2)
-            .build()
-        return TextOverlay.createStaticTextOverlay(text, settings)
+        return text
     }
 
     private class ConstantSpeedProvider(private val speed: Float) : SpeedProvider {

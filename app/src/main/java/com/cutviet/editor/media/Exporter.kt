@@ -74,6 +74,7 @@ class Exporter(private val context: Context) {
             CompositionFactory.Options(
                 width = w, height = h,
                 includeSubtitles = settings.burnSubtitles,
+                includeTexts = true,
                 hdrMode = if (toneMapHdr) Composition.HDR_MODE_TONE_MAP_HDR_TO_SDR_USING_OPEN_GL else Composition.HDR_MODE_KEEP_HDR,
             ),
         )

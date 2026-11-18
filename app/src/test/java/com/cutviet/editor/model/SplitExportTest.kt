@@ -102,4 +102,23 @@ class SplitExportTest {
         assertTrue(s.audios[1].loop)
         assertEquals(2_000, s.audios[1].startMs)
     }
+
+    @Test
+    fun sliceCutsTextLayers() {
+        val t = TextItem(text = "a", startMs = 8_000, durationMs = 5_000)
+        val p = Project(name = "t", clips = listOf(video(60_000)), texts = listOf(t))
+        val s = SplitExport.slice(p, 10_000, 20_000)
+        assertEquals(0, s.texts[0].startMs)
+        assertEquals(3_000, s.texts[0].durationMs)
+        assertTrue(SplitExport.slice(p, 20_000, 30_000).texts.isEmpty())
+    }
+
+    @Test
+    fun stretchTextKeepsMinimumLength() {
+        val t = TextItem(text = "a", startMs = 1_000, durationMs = 2_000)
+        assertEquals(ProjectOps.MIN_TEXT_MS, ProjectOps.stretchTextEnd(t, -5_000).durationMs)
+        val s = ProjectOps.stretchTextStart(t, 5_000)
+        assertEquals(3_000, s.endMs)
+        assertEquals(ProjectOps.MIN_TEXT_MS, s.durationMs)
+    }
 }

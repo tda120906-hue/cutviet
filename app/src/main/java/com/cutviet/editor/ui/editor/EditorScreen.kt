@@ -193,6 +193,7 @@ private fun EditorContent(vm: EditorViewModel, onBack: () -> Unit) {
                 modifier = Modifier.fillMaxSize(),
             )
             OverlayPreview(vm, Modifier.fillMaxSize())
+            TextLayerPreview(vm, Modifier.fillMaxSize())
             SubtitlePreview(vm, Modifier.fillMaxSize())
             OverlayGizmo(vm, Modifier.fillMaxSize())
             if (vm.project.clips.isEmpty()) {
@@ -391,8 +392,8 @@ private fun Toolbar(vm: EditorViewModel, onAddMedia: () -> Unit, onAddMusic: () 
             Tool("Giọng đọc AI", Icons.Filled.RecordVoiceOver) { vm.openPanel(Panel.VOICE) },
             Tool("Phụ đề AI", Icons.Filled.ClosedCaption) { vm.openSubtitles() },
             Tool("Lồng tiếng AI", Icons.Filled.Translate) { vm.showDubbing = true },
-            Tool("Văn bản", Icons.Filled.Title) { clipTool(Panel.TEXT) },
-            Tool("Nhãn dán", Icons.Filled.EmojiEmotions) { clipTool(Panel.STICKER) },
+            Tool("Văn bản", Icons.Filled.Title) { vm.openPanel(Panel.TEXT) },
+            Tool("Nhãn dán", Icons.Filled.EmojiEmotions) { vm.openPanel(Panel.STICKER) },
             Tool("Bộ lọc", Icons.Filled.AutoAwesome) { clipTool(Panel.FILTER) },
             Tool("Điều chỉnh", Icons.Filled.Tune) { clipTool(Panel.ADJUST) },
             Tool("Tỉ lệ", Icons.Filled.AspectRatio) { vm.openPanel(Panel.CANVAS) },

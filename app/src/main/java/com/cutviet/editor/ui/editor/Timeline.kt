@@ -39,6 +39,8 @@ import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.Landscape
+import androidx.compose.material.icons.filled.Title
+import androidx.compose.material.icons.filled.EmojiEmotions
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.material3.Icon
@@ -182,6 +184,33 @@ fun Timeline(
             // One track per overlay, stacked like the picture: the top track is the top layer.
             project.overlays.asReversed().forEach { ov ->
                 key(ov.id) { OverlayTrack(vm, ov, half, totalWidth, pxPerMs, snapMs) }
+            }
+
+            // Text and sticker layers: tap to edit, long-press and drag to move in time,
+            // the white ends (when selected) set how long it shows.
+            val textTotal = project.durationMs
+            ProjectOps.lanes(project.texts, { it.startMs }, { it.endMs }).forEach { lane ->
+                LaneRow(half, totalWidth) {
+                    lane.forEach { t ->
+                        key(t.id) {
+                            LayerBar(
+                                vm = vm, startMs = t.startMs,
+                                durationMs = minOf(t.durationMs, (textTotal - t.startMs).coerceAtLeast(300)),
+                                pxPerMs = pxPerMs,
+                                color = if (t.isSticker) Color(0xFF9A5A1E) else Color(0xFF5E3FA8),
+                                label = t.text.replace('\n', ' '),
+                                icon = if (t.isSticker) Icons.Filled.EmojiEmotions else Icons.Filled.Title,
+                                selected = vm.editingTextId == t.id,
+                                onClick = { vm.selectText(t.id) },
+                                onMove = { deltaMs ->
+                                    ProjectOps.updateText(vm.project, t.id) { it.copy(startMs = (t.startMs + deltaMs).coerceIn(0, (textTotal - ProjectOps.MIN_TEXT_MS).coerceAtLeast(0))) }
+                                },
+                                onStretchStart = { deltaMs -> ProjectOps.updateText(vm.project, t.id) { ProjectOps.stretchTextStart(t, deltaMs) } },
+                                onStretchEnd = { deltaMs -> ProjectOps.updateText(vm.project, t.id) { ProjectOps.stretchTextEnd(t, deltaMs) } },
+                            )
+                        }
+                    }
+                }
             }
 
             // Main track.

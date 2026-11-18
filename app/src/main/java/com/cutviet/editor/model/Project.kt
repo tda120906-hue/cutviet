@@ -73,7 +73,10 @@ data class CropSpec(
     }
 }
 
-/** Text or sticker drawn on top of a clip. Size is a fraction of the output height; x/y are 0..1 from top-left. */
+/**
+ * Text or sticker layer drawn on top of the video from [startMs] for [durationMs] (timeline time).
+ * Size is a fraction of the output height; x/y (its centre) are 0..1 from top-left.
+ */
 data class TextItem(
     val id: String = newId(),
     val text: String,
@@ -84,7 +87,11 @@ data class TextItem(
     val bold: Boolean = true,
     val background: Int? = null,
     val isSticker: Boolean = false,
-)
+    val startMs: Long = 0,
+    val durationMs: Long = 3_000,
+) {
+    val endMs: Long get() = startMs + durationMs
+}
 
 data class Clip(
     val id: String = newId(),
@@ -110,6 +117,7 @@ data class Clip(
     val crop: CropSpec = CropSpec(),
     val filter: FilterPreset = FilterPreset.NONE,
     val adjust: Adjustments = Adjustments(),
+    /** Texts of older drafts, tied to the clip; moved to [Project.texts] when a draft is loaded. */
     val texts: List<TextItem> = emptyList(),
     /** true = fill the canvas (crop edges), false = fit inside (letterbox). */
     val fill: Boolean = false,
@@ -301,6 +309,8 @@ data class Project(
     val audios: List<AudioTrack> = emptyList(),
     /** Sorted by start time, never overlapping. */
     val subtitles: List<Subtitle> = emptyList(),
+    /** Text and sticker layers, each shown for its own time range. */
+    val texts: List<TextItem> = emptyList(),
     val subtitleStyle: SubtitleStyle = SubtitleStyle(),
     val aspect: AspectRatio = AspectRatio.ORIGINAL,
     val createdAt: Long = System.currentTimeMillis(),

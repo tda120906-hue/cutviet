@@ -188,7 +188,8 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
         scheduleSave()
     }
 
-    private fun withoutSubtitles(p: Project) = p.copy(subtitles = emptyList(), subtitleStyle = SubtitleStyle(), updatedAt = 0)
+    // Subtitles and text layers are drawn over the preview by the editor, not by the player.
+    private fun withoutSubtitles(p: Project) = p.copy(subtitles = emptyList(), texts = emptyList(), subtitleStyle = SubtitleStyle(), updatedAt = 0)
 
     fun undo() {
         val prev = undoStack.removeLastOrNull() ?: return
@@ -240,21 +241,67 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
 
     // ---- panels ----
 
+    /**
+     * The project as it was when the open panel was opened or its changes last applied (✓).
+     * Changes show at once on the preview; ✕ asks whether to keep or drop the ones not applied yet.
+     */
+    var panelBaseline by mutableStateOf<Project?>(null)
+        private set
+
+    /** Asking "áp dụng hay bỏ?" before closing a panel with unapplied changes. */
+    var askClosePanel by mutableStateOf(false)
+
+    /** Panels that change the project only through their own buttons (they have no ✓). */
+    fun panelHasApply(p: Panel?) = p != null && p != Panel.VOICE && p != Panel.SUBTITLE
+
+    val panelDirty: Boolean
+        get() = panelBaseline?.let { it.copy(updatedAt = 0) != project.copy(updatedAt = 0) } ?: false
+
     /** Opens a tool panel. Each change made in it is its own undo step. */
     fun openPanel(p: Panel) {
         preview.pause()
         lastLiveEditAt = 0L
         panel = p
+        panelBaseline = project
     }
 
-    /** Replaces the open panel with another one. */
+    /** Replaces the open panel with another one (changes made so far are kept). */
     fun switchPanel(p: Panel) {
-        if (panel == null) openPanel(p) else panel = p
+        if (panel == null) openPanel(p) else {
+            panel = p
+            panelBaseline = project
+        }
+    }
+
+    /** ✓: keeps the changes made in the panel; the panel stays open. */
+    fun applyPanel() {
+        lastLiveEditAt = 0L
+        if (panelDirty) toast = "Đã áp dụng"
+        panelBaseline = project
+    }
+
+    /** ✕ or Back: closes the panel, asking first if there are changes not applied with ✓. */
+    fun requestClosePanel() {
+        if (panelHasApply(panel) && panelDirty) askClosePanel = true else closePanel()
+    }
+
+    /** Drops the changes made since the panel was opened or last applied, and closes it. */
+    fun discardPanel() {
+        askClosePanel = false
+        panelBaseline?.let { if (panelDirty) commit(it) }
+        closePanel()
+    }
+
+    fun applyAndClosePanel() {
+        askClosePanel = false
+        closePanel()
     }
 
     fun closePanel() {
         lastLiveEditAt = 0L
         panel = null
+        panelBaseline = null
+        askClosePanel = false
         editingTextId = null
     }
 
@@ -495,9 +542,9 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
         cropClipId = null
     }
 
-    /** Applies what was set in the crop editor as one undo step. */
-    fun saveCrop(edited: Clip) {
-        cropClipId = null
+    /** Applies what was set in the crop editor as one undo step ([close]: leave the editor too). */
+    fun saveCrop(edited: Clip, close: Boolean = true) {
+        if (close) cropClipId = null else toast = "Đã áp dụng"
         val i = project.clips.indexOfFirst { it.id == edited.id }
         if (i < 0) return
         commit(
@@ -521,8 +568,8 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
      * Saves the eraser drawing for [overlayId] as one undo step. Each save writes a new file so
      * undo can go back to the previous drawing.
      */
-    fun saveEraseMask(overlayId: String, mask: Bitmap?) {
-        eraserOverlayId = null
+    fun saveEraseMask(overlayId: String, mask: Bitmap?, close: Boolean = true) {
+        if (close) eraserOverlayId = null
         if (mask == null) {
             commit(ProjectOps.updateOverlay(project, overlayId) { it.copy(eraseMask = null) })
             return
@@ -544,6 +591,7 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
                 return@launch
             }
             commit(ProjectOps.updateOverlay(project, overlayId) { it.copy(eraseMask = file.absolutePath) })
+            if (!close) toast = "Đã áp dụng"
         }
     }
 
@@ -617,6 +665,13 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
         jumpPlayhead(at)
     }
 
+    /** Moves the playhead and the preview to [ms]. */
+    fun jumpPlayheadTo(ms: Long) {
+        val t = ms.coerceIn(0, project.durationMs)
+        jumpPlayhead(t)
+        preview.seekTo(t)
+    }
+
     /** Moves the playhead to [ms] and scrolls the timeline there. */
     fun jumpPlayhead(ms: Long) {
         playheadMs = ms
@@ -645,8 +700,9 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
             dragPending = false
             pushHistory()
         }
+        val old = project
         project = p.copy(updatedAt = System.currentTimeMillis())
-        preview.setProject(project)
+        if (withoutSubtitles(old) != withoutSubtitles(project)) preview.setProject(project)
         scheduleSave()
     }
 
@@ -1120,23 +1176,51 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
 
     // ---- text ----
 
-    /** Adds a text/sticker to the selected clip, or to the clip under the playhead. */
+    /** Adds a text/sticker layer at the playhead, shown for 3 s (less at the very end). */
     fun addText(item: TextItem) {
-        val index = selected ?: project.clipAt(playheadMs)?.first ?: return
-        selected = index
-        commit(ProjectOps.updateClip(project, index) { it.copy(texts = it.texts + item) })
+        val total = project.durationMs
+        if (total <= 0) {
+            toast = "Hãy thêm video trước."
+            return
+        }
+        val start = playheadMs.coerceIn(0, (total - ProjectOps.MIN_TEXT_MS).coerceAtLeast(0))
+        val length = minOf(3_000L, total - start).coerceAtLeast(ProjectOps.MIN_TEXT_MS)
+        commit(project.copy(texts = project.texts + item.copy(startMs = start, durationMs = length)))
         editingTextId = item.id
     }
 
     fun updateText(id: String, f: (TextItem) -> TextItem) {
-        updateSelected { c -> c.copy(texts = c.texts.map { if (it.id == id) f(it) else it }) }
+        commit(ProjectOps.updateText(project, id, f), coalesce = true)
     }
 
     fun deleteText(id: String) {
-        val i = selected ?: return
-        commit(ProjectOps.updateClip(project, i) { c -> c.copy(texts = c.texts.filterNot { it.id == id }) })
+        commit(project.copy(texts = project.texts.filterNot { it.id == id }))
         if (editingTextId == id) editingTextId = null
     }
+
+    fun duplicateText(id: String) {
+        val t = project.texts.firstOrNull { it.id == id } ?: return
+        val copy = t.copy(id = com.cutviet.editor.model.newId(), startMs = t.endMs.coerceAtMost((project.durationMs - t.durationMs).coerceAtLeast(0)))
+        commit(project.copy(texts = project.texts + copy))
+        editingTextId = copy.id
+    }
+
+    /** Selects a text/sticker layer (from the timeline or the preview) and opens its panel. */
+    fun selectText(id: String) {
+        val t = project.texts.firstOrNull { it.id == id } ?: return
+        selected = null
+        selectedOverlayId = null
+        selectedAudioId = null
+        val p = if (t.isSticker) Panel.STICKER else Panel.TEXT
+        if (panel != p) switchPanel(p)
+        editingTextId = id
+    }
+
+    /** Size in preview pixels of each text layer as last drawn, for moving it on the preview. */
+    val textSizes = androidx.compose.runtime.mutableStateMapOf<String, androidx.compose.ui.unit.IntSize>()
+
+    /** The text layer being edited, if any. */
+    val editingText: TextItem? get() = editingTextId?.let { id -> project.texts.firstOrNull { it.id == id } }
 
     // ---- export ----
 
