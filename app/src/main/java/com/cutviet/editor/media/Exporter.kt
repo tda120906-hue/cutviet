@@ -50,7 +50,7 @@ class Exporter(private val context: Context) {
     private var direct = false
 
     fun outputSize(project: Project, settings: ExportSettings): Pair<Int, Int> =
-        ProjectOps.scaleToShortSide(ProjectOps.canvasSize(project), settings.resolution.shortSide)
+        ProjectOps.exportSize(ProjectOps.canvasSize(project), settings)
 
     /**
      * Exports [project]. [fileName]: name of the saved video (default: CutViet_<project>_<time>.mp4).

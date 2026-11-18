@@ -62,7 +62,7 @@ class SplitExportWorker(context: Context, params: WorkerParameters) : CoroutineW
         }
 
         val n = job.parts.size
-        val (w, h) = ProjectOps.scaleToShortSide(ProjectOps.canvasSize(job.project), job.settings.resolution.shortSide)
+        val (w, h) = ProjectOps.exportSize(ProjectOps.canvasSize(job.project), job.settings)
         val bitrate = ProjectOps.targetBitrate(job.project, w to h, job.settings.quality)
         val learned = ExportSpeed.rate(applicationContext)
         val runStart = SystemClock.elapsedRealtime()
@@ -211,6 +211,7 @@ class SplitExportWorker(context: Context, params: WorkerParameters) : CoroutineW
             val job = JSONObject().apply {
                 put("project", ProjectStore.toJson(project))
                 put("resolution", settings.resolution.name)
+                put("customShortSide", settings.customShortSide)
                 put("quality", settings.quality.name)
                 put("codec", settings.codec.name)
                 put("burnSubtitles", settings.burnSubtitles)
@@ -252,6 +253,7 @@ class SplitExportWorker(context: Context, params: WorkerParameters) : CoroutineW
             val o = JSONObject(File(dir, "job.json").readText())
             val settings = ExportSettings(
                 resolution = ExportResolution.valueOf(o.getString("resolution")),
+                customShortSide = o.optInt("customShortSide", 1080),
                 quality = ExportQuality.valueOf(o.getString("quality")),
                 codec = ExportCodec.valueOf(o.getString("codec")),
                 burnSubtitles = o.getBoolean("burnSubtitles"),

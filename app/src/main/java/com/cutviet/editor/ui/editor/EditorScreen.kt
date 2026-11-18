@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.filled.Brush
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FlipToBack
 import androidx.compose.material.icons.filled.FlipToFront
 import androidx.compose.material.icons.filled.Category
@@ -336,7 +337,16 @@ private fun Toolbar(vm: EditorViewModel, onAddMedia: () -> Unit, onAddMusic: () 
         }
         vm.openPanel(p)
     }
+    val pickedText = vm.editingText
     val tools = when {
+        pickedText != null && vm.panel == null -> listOf(
+            Tool(if (pickedText.isSticker) "Sửa nhãn dán" else "Sửa chữ", Icons.Filled.Tune) { vm.editPickedText() },
+            Tool("Tẩy một phần", Icons.Filled.Brush) { vm.eraseText(pickedText.id) },
+            Tool("Đến đầu phát", Icons.Filled.VerticalAlignCenter) { vm.updateText(pickedText.id) { it.copy(startMs = vm.playheadMs) } },
+            Tool("Nhân bản", Icons.Filled.ContentCopy) { vm.duplicateText(pickedText.id) },
+            Tool("Xóa", Icons.Filled.Delete, danger = true) { vm.deleteText(pickedText.id) },
+            Tool("Bỏ chọn", Icons.Filled.Close) { vm.editingTextId = null },
+        )
         vm.selectedOverlay != null -> listOf(
             Tool("Chỉnh lớp phủ", Icons.Filled.Tune) { vm.openPanel(Panel.OVERLAY) },
             Tool("Tẩy một phần", Icons.Filled.Brush) { vm.openEraser() },

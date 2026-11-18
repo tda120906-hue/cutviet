@@ -186,4 +186,15 @@ class ProjectOpsTest {
         assertEquals(7_999, ProjectOps.overlaySourceTimeMs(o, 10_000))
         assertEquals(0, ProjectOps.overlaySourceTimeMs(o.copy(isImage = true), 1_500))
     }
+
+    @Test
+    fun exportSizeScalesUpAndDownKeepingShape() {
+        val canvas = 1920 to 1080
+        assertEquals(canvas, ProjectOps.exportSize(canvas, ExportSettings()))
+        assertEquals(3840 to 2160, ProjectOps.exportSize(canvas, ExportSettings(resolution = ExportResolution.P2160)))
+        assertEquals(640 to 360, ProjectOps.exportSize(canvas, ExportSettings(resolution = ExportResolution.P360)))
+        assertEquals(1080 to 1920, ProjectOps.exportSize(1080 to 1920, ExportSettings(resolution = ExportResolution.CUSTOM, customShortSide = 1080)))
+        assertEquals(1600 to 900, ProjectOps.exportSize(canvas, ExportSettings(resolution = ExportResolution.CUSTOM, customShortSide = 900)))
+        assertEquals(256 to 144, ProjectOps.exportSize(canvas, ExportSettings(resolution = ExportResolution.CUSTOM, customShortSide = 10)))
+    }
 }

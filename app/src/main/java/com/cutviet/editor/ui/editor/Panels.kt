@@ -492,6 +492,7 @@ private fun TextEditor(vm: EditorViewModel, t: TextItem) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         TextButton(onClick = { vm.editingTextId = null }) { Text("‹ Danh sách", color = Color.White) }
         Spacer(Modifier.weight(1f))
+        TextButton(onClick = { vm.eraseText(t.id) }) { Text("Tẩy một phần", color = Color.White) }
         TextButton(onClick = { vm.duplicateText(t.id) }) { Text("Nhân bản", color = Color.White) }
         TextButton(onClick = { vm.deleteText(t.id) }) {
             Icon(Icons.Filled.Delete, null, tint = Color(0xFFFF6B6B))

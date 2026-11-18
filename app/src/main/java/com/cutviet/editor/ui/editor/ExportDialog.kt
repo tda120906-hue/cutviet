@@ -108,14 +108,43 @@ fun ExportDialog(
                         parts = parts, leftover = leftover,
                     )
                 }
-                Section("Độ phân giải")
+                Section("Độ phân giải (cạnh ngắn; ↑ = phóng to hơn bản gốc)")
+                val original = vm.outputSize(ExportSettings())
+                val originalShort = minOf(original.first, original.second)
                 Row(Modifier.horizontalScroll(rememberScrollState())) {
                     ExportResolution.entries.forEach { r ->
-                        val size = vm.outputSize(settings.copy(resolution = r))
-                        // Hide options that would not change anything (larger than the source).
-                        if (r != ExportResolution.ORIGINAL && size == vm.outputSize(ExportSettings())) return@forEach
-                        Option(r.label, settings.resolution == r) { settings = settings.copy(resolution = r) }
+                        val side = r.shortSide
+                        // A preset equal to the original adds nothing next to "Gốc".
+                        if (side != null && side == originalShort) return@forEach
+                        val label = if (side != null && side > originalShort) "${r.label} ↑" else r.label
+                        Option(label, settings.resolution == r) { settings = settings.copy(resolution = r) }
                     }
+                }
+                if (settings.resolution == ExportResolution.CUSTOM) {
+                    var typed by remember { mutableStateOf(settings.customShortSide.toString()) }
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                        Text("Cạnh ngắn", color = Color.White, modifier = Modifier.padding(end = 8.dp))
+                        OutlinedTextField(
+                            value = typed,
+                            onValueChange = { v ->
+                                typed = v.filter { it.isDigit() }.take(4)
+                                typed.toIntOrNull()?.let { settings = settings.copy(customShortSide = it) }
+                            },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            textStyle = TextStyle(color = Color.White, fontSize = 14.sp),
+                            modifier = Modifier.width(90.dp),
+                        )
+                        Text(" px (${ExportSettings.MIN_SHORT_SIDE}–${ExportSettings.MAX_SHORT_SIDE})", color = TextDim, fontSize = 12.sp)
+                    }
+                }
+                val target = settings.shortSide
+                if (target != null && target > originalShort) {
+                    Text(
+                        "Phóng to không làm hình nét hơn bản gốc, nhưng YouTube/Facebook giữ video 2K/4K với chất lượng nén cao hơn." +
+                            if (target >= 2880) " Mức này nên dùng H.265; nếu máy không mã hóa được cỡ này, app tự hạ xuống mức máy làm được." else "",
+                        color = TextDim, fontSize = 12.sp,
+                    )
                 }
                 Section("Chất lượng (bitrate)")
                 Row(Modifier.horizontalScroll(rememberScrollState())) {
