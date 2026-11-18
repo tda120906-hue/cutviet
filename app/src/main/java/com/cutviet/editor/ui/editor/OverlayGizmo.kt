@@ -3,6 +3,8 @@ package com.cutviet.editor.ui.editor
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -29,7 +31,7 @@ import kotlin.math.max
 @Composable
 fun OverlayGizmo(vm: EditorViewModel, modifier: Modifier = Modifier) {
     val project = vm.project
-    if (project.clips.isEmpty() || project.overlays.isEmpty()) return
+    if (project.clips.isEmpty() || (project.overlays.isEmpty() && project.texts.isEmpty())) return
     val (canvasW, canvasH) = ProjectOps.canvasSize(project)
     BoxWithConstraints(modifier) {
         val boxW = constraints.maxWidth.toFloat()
@@ -48,6 +50,15 @@ fun OverlayGizmo(vm: EditorViewModel, modifier: Modifier = Modifier) {
         val t = vm.playheadMs
         val selected = vm.selectedOverlay?.takeIf { visibleAt(it, t) }
         val showBox = selected != null && !vm.preview.isPlaying.value
+        val selectedText = vm.editingText?.takeIf { it.id in visibleTexts(project.texts, t).map { v -> v.id } }
+
+        /** Centre and half size (view pixels) of a text layer, as drawn by TextLayerPreview. */
+        fun textBox(id: String): Pair<Offset, Size>? {
+            val item = vm.project.texts.firstOrNull { it.id == id } ?: return null
+            val s = vm.textSizes[id] ?: return null
+            return Offset(left + item.x * frameW, top + item.y * frameH) to Size(s.width / 2f, s.height / 2f)
+        }
+        val boxOf by rememberUpdatedState(::textBox)
 
         Canvas(
             Modifier.fillMaxSize().pointerInput(canvasW, canvasH, boxW, boxH) {
@@ -56,6 +67,43 @@ fun OverlayGizmo(vm: EditorViewModel, modifier: Modifier = Modifier) {
                     val down = awaitFirstDown(requireUnconsumed = false)
                     val now = vm.playheadMs
                     val visible = vm.project.overlays.filter { visibleAt(it, now) }
+                    // Text and stickers lie above the overlays: they get the touch first.
+                    val slop = 12.dp.toPx()
+                    val texts = visibleTexts(vm.project.texts, now)
+                    val hitText = (listOfNotNull(texts.firstOrNull { it.id == vm.editingTextId }) + texts.asReversed()).firstOrNull { tx ->
+                        boxOf(tx.id)?.let { (c, h) -> abs(down.position.x - c.x) <= h.width + slop && abs(down.position.y - c.y) <= h.height + slop } ?: false
+                    }
+                    if (hitText != null) {
+                        down.consume()
+                        vm.preview.pause()
+                        if (vm.editingTextId != hitText.id) vm.selectText(hitText.id)
+                        val origin = hitText
+                        var started = false
+                        var pan = Offset.Zero
+                        var zoom = 1f
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            if (event.changes.none { it.pressed }) break
+                            pan += event.calculatePan()
+                            zoom *= event.calculateZoom()
+                            if (!started && pan.getDistance() < viewConfiguration.touchSlop && abs(zoom - 1f) < 0.02f) continue
+                            if (!started) {
+                                started = true
+                                vm.beginDrag()
+                            }
+                            event.changes.forEach { it.consume() }
+                            var x = (origin.x + pan.x / frameW).coerceIn(0f, 1f)
+                            var y = (origin.y + pan.y / frameH).coerceIn(0f, 1f)
+                            if (vm.snapEnabled) {
+                                if (abs(x - 0.5f) < 0.015f) x = 0.5f
+                                if (abs(y - 0.5f) < 0.015f) y = 0.5f
+                            }
+                            val size = (origin.size * zoom).coerceIn(0.02f, 0.5f)
+                            vm.dragUpdate(ProjectOps.updateText(vm.project, origin.id) { it.copy(x = x, y = y, size = size) })
+                        }
+                        return@awaitEachGesture
+                    }
+                    if (visible.isEmpty()) return@awaitEachGesture
                     val current = vm.selectedOverlay?.takeIf { o -> visible.any { it.id == o.id } }
                     var resizing = false
                     val target: Overlay? = when {
@@ -101,6 +149,17 @@ fun OverlayGizmo(vm: EditorViewModel, modifier: Modifier = Modifier) {
                 }
             },
         ) {
+            if (selectedText != null && !vm.preview.isPlaying.value) {
+                textBox(selectedText.id)?.let { (c, h) ->
+                    val pad = 4.dp.toPx()
+                    drawRect(
+                        Accent,
+                        topLeft = Offset(c.x - h.width - pad, c.y - h.height - pad),
+                        size = Size(h.width * 2 + pad * 2, h.height * 2 + pad * 2),
+                        style = Stroke(2.dp.toPx()),
+                    )
+                }
+            }
             if (!showBox || selected == null) return@Canvas
             val p = placementOf(selected)
             val stroke = 2.dp.toPx()

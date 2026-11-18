@@ -133,16 +133,16 @@ fun EraserDialog(vm: EditorViewModel, overlay: Overlay) {
     ) {
         Column(Modifier.fillMaxSize().background(Color.Black).safeDrawingPadding()) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = { vm.closeEraser() }) { Text("Hủy", color = Color.White) }
+                TextButton(onClick = { vm.closeEraser() }) { Text("Đóng", color = Color.White) }
                 Text(
                     "Tẩy một phần lớp phủ", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp,
                     modifier = Modifier.weight(1f),
                 )
                 Button(
-                    onClick = { vm.saveEraseMask(overlay.id, if (isFullyOpaque(mask)) null else mask.copy(Bitmap.Config.ARGB_8888, false)) },
+                    onClick = { vm.saveEraseMask(overlay.id, if (isFullyOpaque(mask)) null else mask.copy(Bitmap.Config.ARGB_8888, false), close = false) },
                     colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.Black),
                     modifier = Modifier.padding(end = 8.dp),
-                ) { Text("Xong", fontWeight = FontWeight.Bold) }
+                ) { Text("✓ Áp dụng", fontWeight = FontWeight.Bold) }
             }
             Text(
                 if (moving) "Kéo một ngón để di chuyển, chụm hai ngón để phóng to." else if (erasing) "Tô lên phần muốn xóa khỏi lớp phủ." else "Tô lên phần đã xóa để hiện lại.",

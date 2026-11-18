@@ -97,7 +97,7 @@ object SplitExport {
     fun slice(p: Project, startMs: Long, endMs: Long): Project {
         val s = startMs.coerceAtLeast(0)
         val e = endMs.coerceAtMost(p.durationMs)
-        if (e <= s) return p.copy(clips = emptyList(), overlays = emptyList(), audios = emptyList(), subtitles = emptyList())
+        if (e <= s) return p.copy(clips = emptyList(), overlays = emptyList(), audios = emptyList(), subtitles = emptyList(), texts = emptyList())
 
         val clips = mutableListOf<Clip>()
         var cs = 0L
@@ -140,7 +140,12 @@ object SplitExport {
             val b = min(e, sub.endMs)
             if (b - a < MIN_PIECE_MS) null else sub.copy(startMs = a - s, endMs = b - s)
         }
-        return p.copy(clips = clips, overlays = overlays, audios = audios, subtitles = subtitles)
+        val texts = p.texts.mapNotNull { t ->
+            val a = max(s, t.startMs)
+            val b = min(e, t.endMs)
+            if (b - a < MIN_PIECE_MS) null else t.copy(startMs = a - s, durationMs = b - a)
+        }
+        return p.copy(clips = clips, overlays = overlays, audios = audios, subtitles = subtitles, texts = texts)
     }
 
     private fun sliceAudio(t: AudioTrack, projectMs: Long, s: Long, e: Long): List<AudioTrack> {

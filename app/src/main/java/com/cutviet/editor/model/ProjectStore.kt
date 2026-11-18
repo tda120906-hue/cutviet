@@ -62,6 +62,7 @@ class ProjectStore(context: Context) {
             put("clips", JSONArray().apply { p.clips.forEach { put(clipJson(it)) } })
             put("overlays", JSONArray().apply { p.overlays.forEach { put(overlayJson(it)) } })
             put("audios", JSONArray().apply { p.audios.forEach { put(audioJson(it)) } })
+            put("texts", JSONArray().apply { p.texts.forEach { put(textJson(it)) } })
             put("subtitles", JSONArray().apply {
                 p.subtitles.forEach { s ->
                     put(JSONObject().apply {
@@ -145,17 +146,25 @@ class ProjectStore(context: Context) {
             put("saturation", c.adjust.saturation.toDouble()); put("warmth", c.adjust.warmth.toDouble())
             put("hue", c.adjust.hue.toDouble())
             put("fill", c.fill)
-            put("texts", JSONArray().apply {
-                c.texts.forEach { t ->
-                    put(JSONObject().apply {
-                        put("id", t.id); put("text", t.text); put("color", t.color); put("size", t.size.toDouble())
-                        put("x", t.x.toDouble()); put("y", t.y.toDouble()); put("bold", t.bold)
-                        put("background", t.background ?: 0); put("hasBackground", t.background != null)
-                        put("isSticker", t.isSticker)
-                    })
-                }
-            })
+            put("texts", JSONArray().apply { c.texts.forEach { put(textJson(it)) } })
         }
+
+        private fun textJson(t: TextItem) = JSONObject().apply {
+            put("id", t.id); put("text", t.text); put("color", t.color); put("size", t.size.toDouble())
+            put("x", t.x.toDouble()); put("y", t.y.toDouble()); put("bold", t.bold)
+            put("background", t.background ?: 0); put("hasBackground", t.background != null)
+            put("isSticker", t.isSticker)
+            put("startMs", t.startMs); put("durationMs", t.durationMs)
+        }
+
+        private fun textFrom(t: JSONObject) = TextItem(
+            id = t.optString("id", newId()), text = t.getString("text"), color = t.optInt("color", -1),
+            size = t.optDouble("size", 0.06).toFloat(), x = t.optDouble("x", 0.5).toFloat(),
+            y = t.optDouble("y", 0.8).toFloat(), bold = t.optBoolean("bold", true),
+            background = if (t.optBoolean("hasBackground")) t.optInt("background") else null,
+            isSticker = t.optBoolean("isSticker"),
+            startMs = t.optLong("startMs", 0), durationMs = t.optLong("durationMs", 3_000),
+        )
 
         fun fromJson(o: JSONObject): Project {
             val clips = o.getJSONArray("clips").let { a -> (0 until a.length()).map { clipFrom(a.getJSONObject(it)) } }
@@ -186,9 +195,17 @@ class ProjectStore(context: Context) {
                     color = t.optInt("color", -1), box = t.optBoolean("box"), bold = t.optBoolean("bold", true),
                 )
             } ?: SubtitleStyle()
+            // Texts used to belong to a clip and last as long as it: turn them into layers over the same time.
+            val texts = o.optJSONArray("texts")?.let { a -> (0 until a.length()).map { textFrom(a.getJSONObject(it)) } }.orEmpty().toMutableList()
+            var t = 0L
+            val bareClips = clips.map { c ->
+                c.texts.forEach { texts += it.copy(startMs = t, durationMs = c.durationMs) }
+                t += c.durationMs
+                if (c.texts.isEmpty()) c else c.copy(texts = emptyList())
+            }
             return Project(
-                id = o.getString("id"), name = o.optString("name", "Dự án"), clips = clips, overlays = overlays, audios = audios,
-                subtitles = subtitles, subtitleStyle = style,
+                id = o.getString("id"), name = o.optString("name", "Dự án"), clips = bareClips, overlays = overlays, audios = audios,
+                subtitles = subtitles, texts = texts, subtitleStyle = style,
                 aspect = runCatching { AspectRatio.valueOf(o.optString("aspect")) }.getOrDefault(AspectRatio.ORIGINAL),
                 createdAt = o.optLong("createdAt"), updatedAt = o.optLong("updatedAt"),
             )
@@ -239,16 +256,7 @@ class ProjectStore(context: Context) {
 
         private fun clipFrom(o: JSONObject): Clip {
             val textsArr = o.optJSONArray("texts") ?: JSONArray()
-            val texts = (0 until textsArr.length()).map { i ->
-                val t = textsArr.getJSONObject(i)
-                TextItem(
-                    id = t.optString("id", newId()), text = t.getString("text"), color = t.optInt("color", -1),
-                    size = t.optDouble("size", 0.06).toFloat(), x = t.optDouble("x", 0.5).toFloat(),
-                    y = t.optDouble("y", 0.8).toFloat(), bold = t.optBoolean("bold", true),
-                    background = if (t.optBoolean("hasBackground")) t.optInt("background") else null,
-                    isSticker = t.optBoolean("isSticker"),
-                )
-            }
+            val texts = (0 until textsArr.length()).map { i -> textFrom(textsArr.getJSONObject(i)) }
             val cropAspect = o.optDouble("cropAspect", -1.0).takeIf { it > 0 }?.toFloat()
             val rotation = o.optInt("rotation")
             val crop = if (o.has("cropL")) {

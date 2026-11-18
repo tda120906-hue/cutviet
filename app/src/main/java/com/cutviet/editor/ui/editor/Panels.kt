@@ -36,6 +36,8 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.SwapVert
+import androidx.activity.compose.BackHandler
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
@@ -106,12 +108,26 @@ fun PanelHost(vm: EditorViewModel, panel: Panel, modifier: Modifier = Modifier.h
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(panel.title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp, modifier = Modifier.weight(1f))
-            IconButton(onClick = { vm.closePanel() }) {
-                // The voice-over is only changed by its own button at the top of the panel; a tick here
-                // was taken for "update" (owner, 2026-11-15), so this panel closes with a plain ✕.
-                if (panel == Panel.VOICE) Icon(Icons.Filled.Close, "Đóng", tint = Color.White)
-                else Icon(Icons.Filled.Check, "Xong", tint = Accent)
+            // ✕ closes (asking about changes not applied yet); ✓ applies and keeps the panel open
+            // (owner, 2026-11-18: the tick must mean "apply", not "back to the main screen").
+            IconButton(onClick = { vm.requestClosePanel() }) { Icon(Icons.Filled.Close, "Đóng", tint = Color.White) }
+            if (vm.panelHasApply(panel)) {
+                val dirty = vm.panelDirty
+                TextButton(onClick = { vm.applyPanel() }) {
+                    Icon(Icons.Filled.Check, null, tint = if (dirty) Accent else TextDim)
+                    Text(" Áp dụng", color = if (dirty) Accent else TextDim, fontWeight = FontWeight.Bold)
+                }
             }
+        }
+        BackHandler { vm.requestClosePanel() }
+        if (vm.askClosePanel) {
+            AlertDialog(
+                onDismissRequest = { vm.askClosePanel = false },
+                title = { Text("Chưa áp dụng thay đổi") },
+                text = { Text("Giữ những thay đổi vừa chỉnh trong \"${panel.title}\" hay bỏ chúng?") },
+                confirmButton = { TextButton(onClick = { vm.applyAndClosePanel() }) { Text("Áp dụng", color = Accent) } },
+                dismissButton = { TextButton(onClick = { vm.discardPanel() }) { Text("Bỏ thay đổi", color = Color(0xFFFF6B6B)) } },
+            )
         }
         Column(
             Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
@@ -432,63 +448,89 @@ private val STICKERS = listOf(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TextPanel(vm: EditorViewModel, stickers: Boolean) {
-    val clip = vm.selectedClip
-    val items = clip?.texts?.filter { it.isSticker == stickers }.orEmpty()
-    val editing = clip?.texts?.firstOrNull { it.id == vm.editingTextId }
+    val items = vm.project.texts.filter { it.isSticker == stickers }.sortedBy { it.startMs }
+    val editing = vm.editingText?.takeIf { it.isSticker == stickers }
 
-    if (stickers && editing == null) {
-        FlowRow {
-            STICKERS.forEach { e ->
-                Box(
-                    Modifier.size(44.dp).clickable {
-                        vm.addText(TextItem(text = e, size = 0.12f, x = 0.5f, y = 0.5f, bold = false, isSticker = true))
-                    },
-                    contentAlignment = Alignment.Center,
-                ) { Text(e, fontSize = 26.sp) }
-            }
-        }
-    } else if (!stickers && editing == null) {
-        Button(
-            onClick = { vm.addText(TextItem(text = "Văn bản")) },
-            colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.Black),
-        ) { Text("+ Thêm văn bản") }
-    }
-
-    if (clip == null) {
-        Text("Hãy đặt đầu phát lên một đoạn video.", color = TextDim, fontSize = 12.sp)
-        return
-    }
-    Text(
-        "Văn bản và nhãn dán hiển thị trong suốt đoạn đang chọn (${formatShort(clip.durationMs)}). " +
-            "Muốn hiện trong một phần, hãy tách đoạn trước.",
-        color = TextDim, fontSize = 11.sp, modifier = Modifier.padding(vertical = 6.dp),
-    )
-
-    if (items.isNotEmpty()) {
-        Row(Modifier.horizontalScroll(rememberScrollState())) {
-            items.forEach { t ->
-                Chip(t.text.take(14), t.id == vm.editingTextId) {
-                    vm.editingTextId = if (vm.editingTextId == t.id) null else t.id
+    if (editing == null) {
+        if (stickers) {
+            FlowRow {
+                STICKERS.forEach { e ->
+                    Box(
+                        Modifier.size(44.dp).clickable {
+                            vm.addText(TextItem(text = e, size = 0.12f, x = 0.5f, y = 0.5f, bold = false, isSticker = true))
+                        },
+                        contentAlignment = Alignment.Center,
+                    ) { Text(e, fontSize = 26.sp) }
                 }
             }
+        } else {
+            Button(
+                onClick = { vm.addText(TextItem(text = "Văn bản", y = 0.5f)) },
+                colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.Black),
+            ) { Text("+ Thêm văn bản") }
         }
+        Text(
+            (if (stickers) "Nhãn dán" else "Văn bản") + " là một lớp phủ: thêm tại đầu phát, kéo trên khung hình để di chuyển, " +
+                "chụm hai ngón để phóng to/thu nhỏ, kéo hai đầu thanh của nó trên timeline để chọn hiện bao lâu.",
+            color = TextDim, fontSize = 11.sp, modifier = Modifier.padding(vertical = 6.dp),
+        )
+        if (items.isNotEmpty()) {
+            Row(Modifier.horizontalScroll(rememberScrollState())) {
+                items.forEach { t -> Chip(t.text.take(14), false) { vm.selectText(t.id); vm.jumpPlayheadTo(t.startMs) } }
+            }
+        }
+        return
     }
-
-    if (editing != null) TextEditor(vm, editing)
+    TextEditor(vm, editing)
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TextEditor(vm: EditorViewModel, t: TextItem) {
     fun set(f: (TextItem) -> TextItem) = vm.updateText(t.id, f)
+    val total = vm.project.durationMs
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        TextButton(onClick = { vm.editingTextId = null }) { Text("‹ Danh sách", color = Color.White) }
+        Spacer(Modifier.weight(1f))
+        TextButton(onClick = { vm.duplicateText(t.id) }) { Text("Nhân bản", color = Color.White) }
+        TextButton(onClick = { vm.deleteText(t.id) }) {
+            Icon(Icons.Filled.Delete, null, tint = Color(0xFFFF6B6B))
+            Text(" Xóa", color = Color(0xFFFF6B6B))
+        }
+    }
     if (!t.isSticker) {
         OutlinedTextField(
             value = t.text,
             onValueChange = { v -> set { it.copy(text = v) } },
-            modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+            modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
             label = { Text("Nội dung") },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
         )
+    }
+
+    // When and for how long it is shown.
+    Text(
+        "Hiện từ ${formatTime(t.startMs)} đến ${formatTime(t.endMs.coerceAtMost(total))} · dài ${formatShort(t.durationMs)}",
+        color = Color.White, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp),
+    )
+    Row(Modifier.horizontalScroll(rememberScrollState())) {
+        listOf(1_000L, 2_000L, 3_000L, 5_000L, 10_000L, 30_000L, 60_000L).forEach { ms ->
+            Chip(if (ms < 60_000) "${ms / 1000} giây" else "${ms / 60_000} phút", t.durationMs == ms) { set { it.copy(durationMs = ms) } }
+        }
+        Chip("Đến hết video", t.endMs == total) { set { it.copy(durationMs = (total - it.startMs).coerceAtLeast(ProjectOps.MIN_TEXT_MS)) } }
+    }
+    Row(Modifier.horizontalScroll(rememberScrollState())) {
+        Chip("Bắt đầu tại đầu phát", false) {
+            val p = vm.playheadMs.coerceIn(0, total)
+            set { it.copy(startMs = p) }
+        }
+        Chip("Kết thúc tại đầu phát", false) {
+            val p = vm.playheadMs
+            set { if (p - it.startMs >= ProjectOps.MIN_TEXT_MS) it.copy(durationMs = p - it.startMs) else it }
+        }
+    }
+
+    if (!t.isSticker) {
         Row(Modifier.padding(vertical = 8.dp).horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
             TEXT_COLORS.forEach { c ->
                 Box(
@@ -508,13 +550,6 @@ private fun TextEditor(vm: EditorViewModel, t: TextItem) {
     LabeledSlider("Cỡ", t.size, 0.02f..0.3f, pct(t.size)) { v -> set { it.copy(size = v) } }
     LabeledSlider("Vị trí ngang", t.x, 0f..1f, pct(t.x)) { v -> set { it.copy(x = v) } }
     LabeledSlider("Vị trí dọc", t.y, 0f..1f, pct(t.y)) { v -> set { it.copy(y = v) } }
-    Row {
-        TextButton(onClick = { vm.deleteText(t.id) }) {
-            Icon(Icons.Filled.Delete, null, tint = Color(0xFFFF6B6B))
-            Text(" Xóa", color = Color(0xFFFF6B6B))
-        }
-        TextButton(onClick = { vm.editingTextId = null }) { Text("Xong", color = Accent) }
-    }
 }
 
 // ---------- canvas ----------

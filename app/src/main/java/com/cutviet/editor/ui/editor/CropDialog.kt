@@ -114,7 +114,7 @@ private val DialTick = Color(0xFFB8BCCB)
 /**
  * Full-screen crop editor ("Cắt khung"): drag the corners or edges of the window to resize it,
  * drag inside to move it, straighten with the dial, mirror, turn a quarter, or pick a ratio.
- * Nothing changes in the project until "Xong".
+ * Nothing changes in the project until "Áp dụng" (✓), which keeps the editor open.
  */
 @Composable
 fun CropDialog(vm: EditorViewModel, clip: Clip) {
@@ -304,7 +304,7 @@ fun CropDialog(vm: EditorViewModel, clip: Clip) {
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                RoundButton(Icons.Filled.Close, "Hủy", Modifier.weight(1f)) { vm.closeCrop() }
+                RoundButton(Icons.Filled.Close, "Đóng", Modifier.weight(1f)) { if (changed) askDiscard = true else vm.closeCrop() }
                 Row(
                     Modifier.weight(2f).height(64.dp).clip(RoundedCornerShape(32.dp)).background(PillColor).padding(6.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -312,8 +312,9 @@ fun CropDialog(vm: EditorViewModel, clip: Clip) {
                     TabButton(Icons.Filled.CropRotate, "Cắt và xoay", tab == 0, Modifier.weight(1f)) { tab = 0 }
                     TabButton(Icons.Filled.AspectRatio, "Tỉ lệ khung", tab == 1, Modifier.weight(1f)) { tab = 1 }
                 }
-                RoundButton(Icons.Filled.Check, "Xong", Modifier.weight(1f), dim = !changed) {
-                    if (changed) vm.saveCrop(draft) else vm.closeCrop()
+                // ✓ applies and stays in the editor; ✕ leaves it (owner, 2026-11-18).
+                RoundButton(Icons.Filled.Check, "Áp dụng", Modifier.weight(1f), dim = !changed) {
+                    if (changed) vm.saveCrop(draft, close = false)
                 }
             }
         }

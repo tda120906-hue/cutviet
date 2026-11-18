@@ -280,6 +280,21 @@ object ProjectOps {
         return p.copy(overlays = list)
     }
 
+    fun updateText(p: Project, id: String, f: (TextItem) -> TextItem): Project =
+        p.copy(texts = p.texts.map { if (it.id == id) f(it) else it })
+
+    /** Shortest a text or sticker can be shown. */
+    const val MIN_TEXT_MS = 200L
+
+    /** Drags the left edge of a text layer: it starts earlier or later, its end stays put. */
+    fun stretchTextStart(t: TextItem, deltaMs: Long): TextItem {
+        val start = (t.startMs + deltaMs).coerceIn(0, t.endMs - MIN_TEXT_MS)
+        return t.copy(startMs = start, durationMs = t.endMs - start)
+    }
+
+    fun stretchTextEnd(t: TextItem, deltaMs: Long): TextItem =
+        t.copy(durationMs = (t.durationMs + deltaMs).coerceAtLeast(MIN_TEXT_MS))
+
     fun updateOverlay(p: Project, id: String, f: (Overlay) -> Overlay): Project =
         p.copy(overlays = p.overlays.map { if (it.id == id) f(it) else it })
 
