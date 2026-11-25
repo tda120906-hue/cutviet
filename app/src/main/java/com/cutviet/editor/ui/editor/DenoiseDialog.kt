@@ -55,7 +55,7 @@ fun DenoiseDialog(vm: EditorViewModel, onDismiss: () -> Unit) {
     val context = LocalContext.current
     var keep by remember { mutableStateOf(DenoisePipeline.Keep.MAIN) }
     var level by remember { mutableFloatStateOf(0f) }
-    val needed = if (keep == DenoisePipeline.Keep.MAIN) listOf(DubModel.MDX_VOC_FT, DubModel.VOXLOCK_ENROLL, DubModel.VOXLOCK_CHUNK)
+    val needed = if (keep == DenoisePipeline.Keep.MAIN) listOf(DubModel.MDX_VOC_FT, DubModel.VOXLOCK_ENROLL, DubModel.VOXLOCK_CHUNK, DubModel.SPEAKER_PRINT)
     else listOf(DubModel.MDX_VOC_FT)
     // Re-check the model files every second while a download runs.
     var tick by remember { mutableIntStateOf(0) }
@@ -101,8 +101,8 @@ fun DenoiseDialog(vm: EditorViewModel, onDismiss: () -> Unit) {
                 }
                 Text(
                     if (keep == DenoisePipeline.Keep.MAIN) {
-                        "Bỏ nhạc nền, tiếng ồn và cả giọng người khác, chỉ giữ người nói chính. App tự nhận giọng chính " +
-                            "là giọng rõ nhất trong 30 giây đầu của đoạn."
+                        "Bỏ nhạc nền, tiếng ồn, tiếng cười chèn vào và cả giọng người khác, chỉ giữ người nói chính. " +
+                            "App tự nhận giọng chính là người nói nhiều nhất trong đoạn (bỏ qua chỗ có tiếng cười)."
                     } else {
                         "Bỏ nhạc nền và tiếng ồn, giữ mọi giọng nói (hợp với video có nhiều người nói chuyện)."
                     },

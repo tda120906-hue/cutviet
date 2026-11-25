@@ -51,6 +51,44 @@ class VoiceIsolator(enrollModel: File, chunkModel: File) : Closeable {
         voice: FloatArray,
         read: (from: Long, out: FloatArray, count: Int) -> Unit,
         write: (FloatArray, Int) -> Unit,
+        prime: FloatArray? = null,
+        progress: (Float) -> Unit,
+    ) {
+        if (prime == null || prime.isEmpty()) return isolateRaw(total, voice, read, write, progress)
+        // [prime] (the main voice's own sample) is played first so VoxLock has locked on to that
+        // person before the clip starts; without it another person talking at the start goes through.
+        val p = prime.size
+        var tmp = FloatArray(0)
+        var skip = p.toLong()
+        isolateRaw(total + p, voice, { from, out, count ->
+            var i = 0
+            while (i < count && from + i < p) { out[i] = prime[(from + i).toInt()]; i++ }
+            if (i < count) {
+                val k = count - i
+                if (i == 0) {
+                    read(from - p, out, k)
+                } else {
+                    if (tmp.size < k) tmp = FloatArray(k)
+                    read(from + i - p, tmp, k)
+                    System.arraycopy(tmp, 0, out, i, k)
+                }
+            }
+        }, { x, n ->
+            if (skip >= n) {
+                skip -= n
+            } else {
+                val off = skip.toInt()
+                skip = 0
+                if (off == 0) write(x, n) else write(x.copyOfRange(off, n), n - off)
+            }
+        }, progress)
+    }
+
+    private suspend fun isolateRaw(
+        total: Long,
+        voice: FloatArray,
+        read: (from: Long, out: FloatArray, count: Int) -> Unit,
+        write: (FloatArray, Int) -> Unit,
         progress: (Float) -> Unit,
     ) {
         val pad = nFft / 2

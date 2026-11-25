@@ -9,6 +9,7 @@ import com.cutviet.editor.media.dubbing.DubModel
 import com.cutviet.editor.media.dubbing.Stems
 import com.cutviet.editor.media.dubbing.StepUnavailableException
 import com.cutviet.editor.media.dubbing.VoiceSeparator
+import com.cutviet.editor.media.dubbing.WhisperAsr
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -18,8 +19,10 @@ import java.io.File
 /**
  * "Lọc tiếng ồn": a clip's sound split into a clean voice track and everything else.
  *  1. MDX-Net (the dub's voice separation) takes the voice out of music, noise and ambience.
- *  2. [Keep.MAIN] only: VoxLock keeps the main speaker (learnt from the loudest 3 s in the first
- *     30 s of speech) and removes other people's voices, joined back to full band by [MainVoiceMix].
+ *  2. [Keep.MAIN] only: [MainVoiceFinder] picks a 3 s sample of the main speaker (speech, not laughter,
+ *     of whoever talks the most); VoxLock keeps that person (two passes, primed with the sample) and
+ *     removes everyone else; stretches where only another person is heard are silenced by voice
+ *     fingerprint; the result is joined back to full band by [MainVoiceMix].
  * Voice + background always add up to the original sound, so nothing is lost: the background track
  * can be turned back up at any time.
  */
@@ -28,7 +31,9 @@ class DenoisePipeline(private val context: Context, private val workDir: File) {
 
     enum class Step(val label: String) {
         SEPARATE("Đang tách giọng khỏi tiếng ồn"),
+        FIND("Đang tìm giọng chính"),
         ISOLATE("Đang giữ lại giọng chính"),
+        CLEAN("Đang bỏ tiếng người khác"),
         MIX("Đang ghép âm thanh"),
     }
 
@@ -37,7 +42,7 @@ class DenoisePipeline(private val context: Context, private val workDir: File) {
         val mdx = DubModel.MDX_VOC_FT
         if (!mdx.isReady(context)) throw StepUnavailableException("Chưa tải model tách giọng (${mdx.label})")
         if (keep == Keep.MAIN) {
-            for (m in listOf(DubModel.VOXLOCK_ENROLL, DubModel.VOXLOCK_CHUNK)) {
+            for (m in listOf(DubModel.VOXLOCK_ENROLL, DubModel.VOXLOCK_CHUNK, DubModel.SPEAKER_PRINT)) {
                 if (!m.isReady(context)) throw StepUnavailableException("Chưa tải model ${m.label}")
             }
         }
@@ -51,7 +56,9 @@ class DenoisePipeline(private val context: Context, private val workDir: File) {
     private suspend fun mainVoice(stems: Stems, progress: (Step, Float) -> Unit): Stems {
         val t0 = SystemClock.elapsedRealtime()
         val v16 = FloatFile(File(workDir, "voice_16k.f32"))
+        val y1 = FloatFile(File(workDir, "main_16k_1.f32"))
         val y16 = FloatFile(File(workDir, "main_16k.f32"))
+        val yg = FloatFile(File(workDir, "main_16k_g.f32"))
         val up = FloatFile(File(workDir, "main_44k.f32"))
         val clean = File(workDir, "main_voice.wav")
         val rest = File(workDir, "rest.wav")
@@ -77,21 +84,49 @@ class DenoisePipeline(private val context: Context, private val workDir: File) {
                 v16.finish()
             }
             val total16 = v16.length
-            // 2. VoxLock.
+            // 2. Who the main voice is: a 3 s sample of speech (not laughter) of the person who talks the most.
+            val threads = WhisperAsr.threads().coerceAtMost(4)
             VoiceIsolator(DubModel.VOXLOCK_ENROLL.file(context), DubModel.VOXLOCK_CHUNK.file(context)).use { vox ->
-                val head = FloatArray(minOf(total16, SEARCH_SECONDS.toLong() * VOX_RATE).toInt())
-                v16.read(0, head, head.size)
-                val sample = VoiceIsolator.loudest(head, VOX_RATE, vox.sampleSeconds, SEARCH_SECONDS)
-                    ?: throw StepUnavailableException("Đoạn video quá ngắn để nhận ra giọng chính (cần ít nhất ${vox.sampleSeconds} giây)")
-                vox.isolate(total16, sample, { from, out, n -> v16.read(from, out, n) }, { x, n -> y16.write(x, n) }) {
-                    progress(Step.ISOLATE, it)
-                }
+                val readV: (Long, FloatArray, Int) -> Unit = { f, o, n -> v16.read(f, o, n) }
+                val at = AudioTagger.open(context, threads).use { tagger ->
+                    MainVoiceFinder.pick(total16, readV, tagger, vox, log = { DubLog.i(TAG, it) }) { progress(Step.FIND, it) }
+                } ?: throw StepUnavailableException("Đoạn video quá ngắn để nhận ra giọng chính (cần ít nhất ${MainVoiceFinder.SAMPLE_SECONDS} giây)")
+                val len = MainVoiceFinder.SAMPLE_SECONDS * VOX_RATE
+                // 3. VoxLock twice: learnt from the sample, then again from the sample as VoxLock cleaned
+                //    it. Each pass hears the sample first, so it is locked on before the clip starts.
+                val sample = FloatArray(len).also { v16.read(at.toLong(), it, len) }
+                vox.isolate(total16, sample, readV, { x, n -> y1.write(x, n) }, prime = sample) { progress(Step.ISOLATE, it * 0.5f) }
+                y1.finish()
+                val cleaned = FloatArray(len).also { y1.read(at.toLong(), it, len) }
+                vox.isolate(total16, cleaned, readV, { x, n -> y16.write(x, n) }, prime = cleaned) { progress(Step.ISOLATE, 0.5f + it * 0.5f) }
                 y16.finish()
+                y1.close(); y1.file.delete()
+                DubLog.i(TAG, "voxlock ${SystemClock.elapsedRealtime() - t0} ms")
+                // 4. Silence the stretches where only someone else is heard.
+                val gate = SpeakerPrint(DubModel.SPEAKER_PRINT.file(context), threads).use { prints ->
+                    MainVoiceFinder.gate(total16, { f, o, n -> y16.read(f, o, n) }, at, prints) { progress(Step.CLEAN, it) }
+                }
+                val block = FloatArray(BLOCK)
+                var pos = 0L
+                var silenced = 0L
+                while (pos < total16) {
+                    currentCoroutineContext().ensureActive()
+                    val n = minOf(BLOCK.toLong(), total16 - pos).toInt()
+                    y16.read(pos, block, n)
+                    for (i in 0 until n) {
+                        val g = MainVoiceFinder.gainAt(gate, pos + i)
+                        if (g < 0.5f) silenced++
+                        block[i] *= g
+                    }
+                    yg.write(block, n)
+                    pos += n
+                }
+                yg.finish()
+                DubLog.i(TAG, "gate silenced ${silenced * 1000 / VOX_RATE} ms of other voices")
             }
-            DubLog.i(TAG, "voxlock ${SystemClock.elapsedRealtime() - t0} ms")
-            // 3. How much VoxLock took away, per 10 ms.
-            val gains = MainVoiceMix.bandGains(total16, VOX_RATE, { f, o, n -> v16.read(f, o, n) }, { f, o, n -> y16.read(f, o, n) })
-            // 4. VoxLock's output back at 44.1 kHz.
+            // 5. How much was taken away, per 10 ms.
+            val gains = MainVoiceMix.bandGains(total16, VOX_RATE, { f, o, n -> v16.read(f, o, n) }, { f, o, n -> yg.read(f, o, n) })
+            // 6. The main voice back at 44.1 kHz.
             run {
                 val rs = SincResampler(VOX_RATE, RATE, 1)
                 val block = FloatArray(BLOCK)
@@ -100,14 +135,14 @@ class DenoisePipeline(private val context: Context, private val workDir: File) {
                 while (pos < total16) {
                     currentCoroutineContext().ensureActive()
                     val n = minOf(BLOCK.toLong(), total16 - pos).toInt()
-                    y16.read(pos, block, n)
+                    yg.read(pos, block, n)
                     rs.push(block, n) { f -> one[0] = f[0]; up.write(one, 1) }
                     pos += n
                 }
                 rs.finish(total16) { f -> one[0] = f[0]; up.write(one, 1) }
                 up.finish()
             }
-            // 5. Full-band main voice, and the rest = original - main voice.
+            // 7. Full-band main voice, and the rest = original - main voice.
             WavReader(stems.voice, CH).use { voice ->
                 WavReader(stems.background, CH).use { bg ->
                     WavWriter(clean, RATE, CH).use { cw ->
@@ -134,8 +169,7 @@ class DenoisePipeline(private val context: Context, private val workDir: File) {
                 }
             }
         } finally {
-            v16.close(); y16.close(); up.close()
-            v16.file.delete(); y16.file.delete(); up.file.delete()
+            for (f in listOf(v16, y1, y16, yg, up)) { f.close(); f.file.delete() }
         }
         stems.voice.delete()
         stems.background.delete()

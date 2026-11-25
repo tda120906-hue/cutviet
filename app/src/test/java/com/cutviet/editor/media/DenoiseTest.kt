@@ -1,6 +1,9 @@
 package com.cutviet.editor.media
 
+import com.cutviet.editor.media.denoise.AudioTagger
+import com.cutviet.editor.media.denoise.MainVoiceFinder
 import com.cutviet.editor.media.denoise.MainVoiceMix
+import com.cutviet.editor.media.denoise.SpeakerPrint
 import com.cutviet.editor.media.denoise.VoiceIsolator
 import com.cutviet.editor.model.AudioKind
 import com.cutviet.editor.model.Clip
@@ -103,5 +106,31 @@ class DenoiseTest {
         val again = ProjectOps.applyDenoise(out, 1, ProjectOps.DubStems("file:///v2.wav", "file:///b2.wav", 2000, 4000), 0f)
         assertEquals(2, again.audios.size)
         assertEquals("file:///v2.wav", again.audios.single { it.kind == AudioKind.SOURCE_VOICE }.uri)
+    }
+
+    @Test fun taggerFeaturesHaveOneFramePer10ms() {
+        val x = FloatArray(16_000) { (0.3 * sin(2 * PI * 440 * it / 16000.0)).toFloat() }
+        val (f, t) = AudioTagger.features(x)
+        assertEquals(101, t)
+        assertEquals(64 * 101, f.size)
+        // 440 Hz falls in a low mel band, which is then the loudest one.
+        val mean = FloatArray(64) { m -> (0 until t).map { f[m * t + it] }.average().toFloat() }
+        assertTrue(mean.indices.maxByOrNull { mean[it] }!! < 16)
+        // Nothing more than 120 dB under the top.
+        assertTrue(f.max() - f.min() <= 120.001f)
+    }
+
+    @Test fun gateGainIsInterpolatedPer10ms() {
+        val g = floatArrayOf(1f, 0f, 0f, 1f)
+        assertEquals(1f, MainVoiceFinder.gainAt(g, 0), 1e-6f)
+        assertEquals(0.5f, MainVoiceFinder.gainAt(g, 80), 1e-6f)
+        assertEquals(0f, MainVoiceFinder.gainAt(g, 200), 1e-6f)
+        assertEquals(1f, MainVoiceFinder.gainAt(g, 10_000), 1e-6f)
+    }
+
+    @Test fun fingerprintsAreUnitVectors() {
+        val v = SpeakerPrint.normalize(floatArrayOf(3f, 4f))
+        assertEquals(1f, SpeakerPrint.similarity(v, v), 1e-6f)
+        assertEquals(0.6f, v[0], 1e-6f)
     }
 }
