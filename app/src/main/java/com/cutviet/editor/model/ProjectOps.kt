@@ -169,6 +169,41 @@ object ProjectOps {
         )
     }
 
+    /**
+     * "Lọc tiếng ồn": clip [index] is muted and its sound comes from two tracks, the clean voice at the
+     * clip's own volume and the rest (noise, music, other voices) at [backgroundVolume] (0 = removed,
+     * still on the timeline so it can be turned up). The stems cover source [stems].sourceStartMs on
+     * for [stems].durationMs. An earlier separation of this clip (dub or denoise) is replaced; dub lines stay.
+     */
+    fun applyDenoise(p: Project, index: Int, stems: DubStems, backgroundVolume: Float): Project {
+        val c = p.clips.getOrNull(index) ?: return p
+        if (c.isImage) return p
+        val clipStart = p.clipStartMs(index)
+        val clipEnd = clipStart + c.durationMs
+        val from = (c.trimStartMs - stems.sourceStartMs).coerceIn(0, stems.durationMs)
+        val to = (c.trimEndMs - stems.sourceStartMs).coerceIn(from, stems.durationMs)
+        if (to <= from) return p
+        val start = clipStart + ((stems.sourceStartMs + from - c.trimStartMs) / c.speed).toLong()
+        val name = c.uri.substringAfterLast('/').take(30)
+        val voiceVolume = if (c.volume > 0f) c.volume else 1f
+        val tracks = listOf(
+            AudioTrack(
+                kind = AudioKind.SOURCE_VOICE, uri = stems.voiceUri, name = "Giọng đã lọc: $name",
+                sourceDurationMs = stems.durationMs, sourceStartMs = from, sourceEndMs = to, startMs = start, speed = c.speed,
+                volume = voiceVolume.coerceIn(0f, 2f),
+            ),
+            AudioTrack(
+                kind = AudioKind.BACKGROUND, uri = stems.backgroundUri, name = "Tiếng ồn đã lọc: $name",
+                sourceDurationMs = stems.durationMs, sourceStartMs = from, sourceEndMs = to, startMs = start, speed = c.speed,
+                volume = backgroundVolume.coerceIn(0f, 2f),
+            ),
+        )
+        val replaced = setOf(AudioKind.BACKGROUND, AudioKind.SOURCE_VOICE)
+        val kept = p.audios.filterNot { it.kind in replaced && it.startMs in clipStart until clipEnd }
+        val clips = p.clips.toMutableList().also { it[index] = c.copy(volume = 0f) }
+        return p.copy(clips = clips, audios = kept + tracks)
+    }
+
     /** Where [sourceMs] of the video [uri] plays on the timeline (the first clip showing it), or null. */
     fun timelineOfSource(p: Project, uri: String, sourceMs: Long): Long? {
         var t = 0L
