@@ -48,6 +48,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.LaunchedEffect
@@ -81,7 +83,8 @@ fun ExportDialog(
     }
     var movieMode by remember { mutableStateOf(false) }
     var overlapMs by remember { mutableLongStateOf(5_000L) }
-    val effective = plan.copy(overlapMs = if (movieMode) overlapMs else 0)
+    val clipLengths = vm.project.clips.map { it.durationMs }
+    val effective = plan.copy(overlapMs = if (movieMode) overlapMs else 0, clipLengthsMs = clipLengths)
     val parts = if (split) SplitExport.parts(total, effective) else emptyList()
     val leftover = if (split && plan.mode == SplitMode.CUSTOM) SplitExport.customLeftoverMs(total, plan.customMs) else 0L
 
@@ -102,7 +105,7 @@ fun ExportDialog(
                 }
                 if (split) {
                     SplitOptions(
-                        total = total, plan = plan, onPlan = { plan = it },
+                        total = total, plan = plan.copy(clipLengthsMs = clipLengths), onPlan = { plan = it },
                         movieMode = movieMode, onMovieMode = { movieMode = it },
                         overlapMs = overlapMs, onOverlap = { overlapMs = it },
                         parts = parts, leftover = leftover,
@@ -231,6 +234,35 @@ private fun SplitOptions(
                 )
             }
         }
+        SplitMode.CLIPS -> {
+            val n = plan.clipLengthsMs.size
+            Text(
+                "Mỗi đoạn trên timeline (cắt bằng nút Tách) thành 1 video: $n đoạn. Bật \"nối\" giữa hai đoạn để chúng vào cùng 1 video.",
+                color = TextDim, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp),
+            )
+            if (n > 1) {
+                Row {
+                    TextButton(onClick = { onPlan(plan.copy(joinAfter = emptySet())) }) { Text("Tách hết") }
+                    TextButton(onClick = { onPlan(plan.copy(joinAfter = (0 until n - 1).toSet())) }) { Text("Nối hết") }
+                }
+            }
+            var t = 0L
+            plan.clipLengthsMs.take(MAX_CLIP_ROWS).forEachIndexed { i, len ->
+                Text("Đoạn ${i + 1}: ${formatClock(t)} → ${formatClock(t + len)} (${formatClock(len)})", color = Color.White, fontSize = 13.sp)
+                t += len
+                if (i < n - 1) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = i in plan.joinAfter,
+                            onCheckedChange = { on -> onPlan(plan.copy(joinAfter = if (on) plan.joinAfter + i else plan.joinAfter - i)) },
+                            colors = CheckboxDefaults.colors(checkedColor = Accent, checkmarkColor = Color.Black),
+                        )
+                        Text("nối với đoạn ${i + 2}", color = TextDim, fontSize = 12.sp)
+                    }
+                }
+            }
+            if (n > MAX_CLIP_ROWS) Text("… và ${n - MAX_CLIP_ROWS} đoạn nữa (mỗi đoạn 1 video)", color = TextDim, fontSize = 12.sp)
+        }
         SplitMode.CUSTOM -> {
             CountRow("Số video", plan.customMs.size) { n ->
                 // Keep what was typed; new videos share what is left.
@@ -289,6 +321,7 @@ private fun SplitOptions(
 }
 
 private const val MAX_LISTED = 12
+private const val MAX_CLIP_ROWS = 60
 
 @Composable
 private fun CountRow(label: String, value: Int, onChange: (Int) -> Unit) {

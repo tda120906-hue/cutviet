@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.filled.Brush
+import androidx.compose.material.icons.automirrored.filled.CallMerge
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FlipToBack
 import androidx.compose.material.icons.filled.FlipToFront
@@ -373,6 +374,7 @@ private fun Toolbar(vm: EditorViewModel, onAddMedia: () -> Unit, onAddMusic: () 
         }
         clip != null -> buildList {
             add(Tool("Tách", Icons.Filled.VerticalSplit) { vm.splitAtPlayhead() })
+            if ((vm.selected ?: 0) < vm.project.clips.lastIndex) add(Tool("Gộp với đoạn sau", Icons.AutoMirrored.Filled.CallMerge) { vm.mergeSelectedWithNext() })
             add(Tool("Lớp phủ", Icons.Filled.Layers) { onAddOverlay() })
             if (clip.isImage) add(Tool("Thời lượng", Icons.Filled.Timer) { vm.openPanel(Panel.DURATION) })
             else {

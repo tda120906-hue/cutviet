@@ -356,6 +356,24 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
         selected = project.clipAt(t)?.first
     }
 
+    /** "Gộp": joins the selected clip (or the one under the playhead) with the next one. */
+    fun mergeSelectedWithNext() {
+        val i = selected ?: project.clipAt(playheadMs)?.first ?: return
+        if (i >= project.clips.lastIndex) {
+            toast = "Đây là đoạn cuối, không có đoạn sau để gộp."
+            return
+        }
+        val merged = ProjectOps.mergeWithNext(project, i)
+        if (merged == null) {
+            toast = "Hai đoạn này không phải hai nửa liền nhau của cùng một video nên không gộp thành 1 đoạn được. " +
+                "Khi xuất \"Theo đoạn tách\" bạn vẫn có thể gộp chúng vào cùng 1 video."
+            return
+        }
+        commit(merged)
+        selected = i
+        toast = "Đã gộp đoạn ${i + 1} và ${i + 2}"
+    }
+
     fun deleteSelected() {
         val i = selected ?: return
         commit(ProjectOps.delete(project, i))

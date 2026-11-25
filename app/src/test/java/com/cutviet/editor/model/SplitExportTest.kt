@@ -121,4 +121,27 @@ class SplitExportTest {
         assertEquals(3_000, s.endMs)
         assertEquals(ProjectOps.MIN_TEXT_MS, s.durationMs)
     }
+
+    @Test
+    fun clipModeMakesOneVideoPerClipAndJoins() {
+        val lens = listOf(10_000L, 20_000L, 5_000L, 7_000L)
+        val parts = SplitExport.parts(42_000, SplitPlan(mode = SplitMode.CLIPS, clipLengthsMs = lens))
+        assertEquals(listOf(10_000L, 20_000L, 5_000L, 7_000L), parts.map { it.durationMs })
+        val joined = SplitExport.parts(42_000, SplitPlan(mode = SplitMode.CLIPS, clipLengthsMs = lens, joinAfter = setOf(1, 2)))
+        assertEquals(listOf(10_000L, 32_000L), joined.map { it.durationMs })
+        assertEquals(10_000, joined[1].startMs)
+    }
+
+    @Test
+    fun mergeJoinsTwoHalvesOfACut() {
+        val p = Project(name = "t", clips = listOf(video(10_000)))
+        val cut = ProjectOps.splitAt(p, 4_000)
+        val merged = ProjectOps.mergeWithNext(cut, 0)!!
+        assertEquals(1, merged.clips.size)
+        assertEquals(0, merged.clips[0].trimStartMs)
+        assertEquals(10_000, merged.clips[0].trimEndMs)
+        // Two different videos cannot become one clip.
+        val two = Project(name = "t", clips = listOf(video(10_000), video(5_000)))
+        assertEquals(null, ProjectOps.mergeWithNext(two, 0))
+    }
 }

@@ -11,6 +11,8 @@ enum class SplitMode(val label: String) {
     CUSTOM("Tự chọn"),
     /** Videos of a fixed length; the last one gets what is left. */
     FIXED("Theo thời lượng"),
+    /** One video per clip on the timeline (as cut with "Tách"); neighbours can be joined. */
+    CLIPS("Theo đoạn tách"),
 }
 
 data class SplitPlan(
@@ -26,6 +28,10 @@ data class SplitPlan(
      * it (a short recap). 0 = videos follow each other exactly.
      */
     val overlapMs: Long = 0,
+    /** CLIPS: the timeline length of each clip, in order (filled from the project). */
+    val clipLengthsMs: List<Long> = emptyList(),
+    /** CLIPS: clip indices exported together with the clip after them. */
+    val joinAfter: Set<Int> = emptySet(),
 )
 
 /** One video to export: timeline [startMs]..[endMs]; [index] counts from 0. */
@@ -59,6 +65,20 @@ object SplitExport {
                 }
                 list
             }
+            SplitMode.CLIPS -> {
+                val list = mutableListOf<Pair<Long, Long>>()
+                var t = 0L
+                var start = 0L
+                plan.clipLengthsMs.forEachIndexed { i, len ->
+                    t += len
+                    val last = i == plan.clipLengthsMs.lastIndex
+                    if (last || i !in plan.joinAfter) {
+                        list += start to min(t, totalMs)
+                        start = t
+                    }
+                }
+                list.take(MAX_PARTS)
+            }
             SplitMode.CUSTOM -> {
                 val list = mutableListOf<Pair<Long, Long>>()
                 var t = 0L
@@ -73,7 +93,7 @@ object SplitExport {
             }
         }.filter { it.second > it.first }
         // A crumb at the end (e.g. 6:00:00.4 split by the hour) joins the previous video.
-        if (raw.size >= 2 && plan.mode != SplitMode.CUSTOM && raw.last().let { it.second - it.first } < MIN_TAIL_MS) {
+        if (raw.size >= 2 && plan.mode != SplitMode.CUSTOM && plan.mode != SplitMode.CLIPS && raw.last().let { it.second - it.first } < MIN_TAIL_MS) {
             return raw.dropLast(2) + (raw[raw.size - 2].first to raw.last().second)
         }
         return raw

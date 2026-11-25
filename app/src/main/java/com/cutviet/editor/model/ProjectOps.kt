@@ -23,6 +23,28 @@ object ProjectOps {
         return p.copy(clips = clips)
     }
 
+    /**
+     * Joins clip [index] with the one after it ("Gộp"), when they are the two halves of one cut:
+     * the same video, at the same speed, the second starting where the first ends. The joined clip
+     * keeps the first one's look. Null when they cannot become one clip.
+     */
+    fun mergeWithNext(p: Project, index: Int): Project? {
+        val a = p.clips.getOrNull(index) ?: return null
+        val b = p.clips.getOrNull(index + 1) ?: return null
+        val joinable = when {
+            a.uri != b.uri || a.isImage != b.isImage -> false
+            a.isImage -> true
+            else -> a.speed == b.speed && abs(a.trimEndMs - b.trimStartMs) <= 2
+        }
+        if (!joinable) return null
+        val merged = if (a.isImage) a.copy(trimStartMs = 0, trimEndMs = a.trimmedMs + b.trimmedMs)
+        else a.copy(trimEndMs = b.trimEndMs)
+        val clips = p.clips.toMutableList()
+        clips[index] = merged
+        clips.removeAt(index + 1)
+        return p.copy(clips = clips)
+    }
+
     fun delete(p: Project, index: Int): Project {
         if (index !in p.clips.indices) return p
         return p.copy(clips = p.clips.toMutableList().apply { removeAt(index) })
