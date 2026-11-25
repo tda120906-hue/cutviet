@@ -104,7 +104,7 @@ class DenoisePipeline(private val context: Context, private val workDir: File) {
                 DubLog.i(TAG, "voxlock ${SystemClock.elapsedRealtime() - t0} ms")
                 // 4. Silence the stretches where only someone else is heard.
                 val gate = SpeakerPrint(DubModel.SPEAKER_PRINT.file(context), threads).use { prints ->
-                    MainVoiceFinder.gate(total16, { f, o, n -> y16.read(f, o, n) }, at, prints) { progress(Step.CLEAN, it) }
+                    MainVoiceFinder.gate(total16, { f, o, n -> y16.read(f, o, n) }, at, prints, progress = { progress(Step.CLEAN, it) })
                 }
                 val block = FloatArray(BLOCK)
                 var pos = 0L
