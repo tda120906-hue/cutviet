@@ -90,6 +90,17 @@ enum class DubModel(
         gated = false,
         directUrl = "https://github.com/arbazsiddiqui/voxlock/releases/download/sherpa-onnx-models/voxlock_chunk_int8.onnx",
         sha256 = "df61a9d0062b0adbcf1182302b1eb8b815f15ac47ea4923e8e164c1aff64121d",
+    ),
+
+    /** Voice fingerprints (WeSpeaker ResNet34, CC BY 4.0): "Lọc tiếng ồn" silences stretches of someone else's voice. */
+    SPEAKER_PRINT(
+        label = "Nhận dấu vân giọng (WeSpeaker)",
+        repo = "",
+        path = "wespeaker_en_voxceleb_resnet34_LM.onnx",
+        approxBytes = 26_530_550L,
+        gated = false,
+        directUrl = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/wespeaker_en_voxceleb_resnet34_LM.onnx",
+        sha256 = "e9848563da86f263117134dfd7ad63c92355b37de492b55e325400c9d9c39012",
     );
 
     fun file(context: Context) = File(ModelStore.dir(context), path)
