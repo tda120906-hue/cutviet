@@ -248,6 +248,7 @@ private fun EditorContent(vm: EditorViewModel, onBack: () -> Unit) {
             vm.dubStatus?.let { DubbingBanner(it, onOpen = { vm.showDubbing = true }) }
             vm.redubStatus?.let { DubbingBanner(it, onOpen = {}) }
             vm.subtitleStatus?.let { SubtitleBanner(it, onOpen = { vm.openPanel(Panel.SUBTITLE) }) }
+            vm.denoiseStatus?.let { SubtitleBanner(it, onOpen = { vm.showDenoise = true }) }
             Toolbar(vm, onAddMedia = { addMedia() }, onAddMusic = { addMusic() }, onAddOverlay = { addOverlay() })
         }
     }
@@ -278,6 +279,9 @@ private fun EditorContent(vm: EditorViewModel, onBack: () -> Unit) {
     vm.redubTrackId?.let { RedubDialog(vm, it, onDismiss = { vm.redubTrackId = null }) }
     vm.voicePickerTrackId?.let { VoicePickerDialog(vm, it, onDismiss = { vm.voicePickerTrackId = null }) }
     if (vm.showDubbing) DubbingDialog(vm, onDismiss = { vm.showDubbing = false; vm.dubbingTab = 0 }, initialTab = vm.dubbingTab)
+    if (vm.showDenoise) {
+        DenoiseDialog(vm, onDismiss = { vm.showDenoise = false })
+    }
     if (vm.showSubtitleDialog) {
         SubtitleDialog(vm, onDismiss = { vm.showSubtitleDialog = false }, onOpenModels = {
             vm.showSubtitleDialog = false
@@ -382,6 +386,7 @@ private fun Toolbar(vm: EditorViewModel, onAddMedia: () -> Unit, onAddMusic: () 
                 add(Tool("Tốc độ", Icons.Filled.Speed) { vm.openPanel(Panel.SPEED) })
                 add(Tool("Âm lượng", Icons.AutoMirrored.Filled.VolumeUp) { vm.openPanel(Panel.VOLUME) })
                 add(Tool("Tách âm thanh", Icons.AutoMirrored.Filled.CallSplit) { vm.extractAudioFromSelected() })
+                add(Tool("Lọc tiếng ồn", Icons.Filled.GraphicEq) { vm.showDenoise = true })
                 add(Tool("Lồng tiếng AI", Icons.Filled.Translate) { vm.showDubbing = true })
             }
             add(Tool("Phụ đề AI", Icons.Filled.ClosedCaption) { vm.openSubtitles() })

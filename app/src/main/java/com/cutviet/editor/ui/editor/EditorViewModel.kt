@@ -1055,6 +1055,85 @@ class EditorViewModel(app: Application, projectId: String) : AndroidViewModel(ap
         }
     }
 
+    // ---- noise filter ("Lọc tiếng ồn") ----
+
+    var showDenoise by mutableStateOf(false)
+
+    /** Progress line of the running noise filter, or null when none runs. */
+    var denoiseStatus by mutableStateOf<String?>(null)
+        private set
+
+    init {
+        watchDenoise()
+    }
+
+    /** Filters the selected video clip's sound in the background; the result replaces its sound when done. */
+    fun startDenoise(keep: com.cutviet.editor.media.denoise.DenoisePipeline.Keep, backgroundLevel: Float) {
+        if (denoiseStatus != null) {
+            toast = "Đang có một lượt lọc tiếng ồn chạy."
+            return
+        }
+        val c = selected?.let { project.clips.getOrNull(it) }
+        if (c == null || c.isImage || !c.hasAudio) {
+            toast = "Hãy chọn một đoạn video có tiếng."
+            return
+        }
+        com.cutviet.editor.media.denoise.DenoiseWorker.enqueue(
+            getApplication(), project.id, c.id, c.uri, c.trimStartMs, c.trimEndMs, keep, backgroundLevel,
+        )
+        denoiseStatus = "Đang chuẩn bị lọc tiếng ồn…"
+    }
+
+    fun cancelDenoise() {
+        WorkManager.getInstance(getApplication<Application>()).cancelUniqueWork(com.cutviet.editor.media.denoise.DenoiseWorker.UNIQUE_NAME)
+    }
+
+    private fun watchDenoise() {
+        val app = getApplication<Application>()
+        val w = com.cutviet.editor.media.denoise.DenoiseWorker
+        viewModelScope.launch {
+            WorkManager.getInstance(app).getWorkInfosForUniqueWorkFlow(w.UNIQUE_NAME).collect { infos ->
+                val info = infos.lastOrNull { it.tags.contains(DubbingWorker.projectTag(project.id)) } ?: return@collect
+                if (!info.state.isFinished) {
+                    val step = info.progress.getString(w.KEY_STEP)
+                        ?.let { runCatching { com.cutviet.editor.media.denoise.DenoisePipeline.Step.valueOf(it) }.getOrNull() }
+                    val pct = (info.progress.getFloat(w.KEY_PROGRESS, 0f) * 100).toInt()
+                    denoiseStatus = if (step != null) "Lọc ồn: ${step.label}… $pct%" else "Đang chuẩn bị lọc tiếng ồn…"
+                    return@collect
+                }
+                val wasRunning = denoiseStatus != null
+                denoiseStatus = null
+                when (info.state) {
+                    WorkInfo.State.SUCCEEDED -> applyDenoiseResult(app, info)
+                    WorkInfo.State.FAILED -> if (wasRunning) toast = info.outputData.getString(w.KEY_ERROR) ?: "Lọc tiếng ồn thất bại."
+                    else -> if (wasRunning) toast = "Đã huỷ lọc tiếng ồn."
+                }
+            }
+        }
+    }
+
+    private suspend fun applyDenoiseResult(app: Application, info: WorkInfo) {
+        val w = com.cutviet.editor.media.denoise.DenoiseWorker
+        val file = w.resultFile(app, info.id.toString())
+        if (!file.exists()) return // already applied
+        val json = withContext(Dispatchers.IO) {
+            runCatching { org.json.JSONObject(file.readText()) }.getOrNull().also { file.renameTo(File(file.parentFile, "denoise_applied.json")) }
+        }
+        val clipId = info.tags.firstOrNull { it.startsWith(w.TAG_CLIP) }?.removePrefix(w.TAG_CLIP)
+        val level = info.tags.firstOrNull { it.startsWith(w.TAG_LEVEL) }?.removePrefix(w.TAG_LEVEL)?.toFloatOrNull() ?: 0f
+        val at = project.clips.indexOfFirst { it.id == clipId }
+        if (json == null || at < 0) {
+            toast = "Không đặt được kết quả lọc tiếng ồn (đoạn video đã bị xoá?)."
+            return
+        }
+        val stems = ProjectOps.DubStems(
+            Uri.fromFile(File(json.getString("voice"))).toString(), Uri.fromFile(File(json.getString("background"))).toString(),
+            json.getLong("sourceStartMs"), json.getLong("durationMs"),
+        )
+        commit(ProjectOps.applyDenoise(project, at, stems, level))
+        toast = "Đã lọc tiếng ồn đoạn ${at + 1}. Tiếng ồn đã tách nằm ở dòng âm thanh riêng, chỉnh âm lượng để nghe lại nếu cần."
+    }
+
     // ---- subtitles ----
 
     var showSubtitleDialog by mutableStateOf(false)
